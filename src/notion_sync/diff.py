@@ -11,7 +11,7 @@ import logging
 from difflib import SequenceMatcher
 from typing import Any
 
-from .client import RateLimitedNotionClient
+from app.lib.notion_sync.client import RateLimitedNotionClient
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +43,29 @@ def extract_block_text(block: dict[str, Any]) -> str:
     if block_type == "divider":
         return "---"
 
-    # Handle table blocks - compare structure
+    # Handle table blocks - compare structure AND content
     if block_type == "table":
-        return f"table:{content.get('table_width', 0)}"
+        table_width = content.get("table_width", 0)
+        # Check for children (local blocks have 'children', fetched blocks have '_children')
+        children = block.get("_children") or content.get("children", [])
+        if children:
+            # Extract text from all table rows
+            row_texts = []
+            for child in children:
+                if child.get("type") == "table_row":
+                    cells = child.get("table_row", {}).get("cells", [])
+                    cell_texts = []
+                    for cell in cells:
+                        # Extract text from each cell's rich_text
+                        if isinstance(cell, list):
+                            for segment in cell:
+                                if "plain_text" in segment:
+                                    cell_texts.append(segment["plain_text"])
+                                elif "text" in segment and "content" in segment["text"]:
+                                    cell_texts.append(segment["text"]["content"])
+                    row_texts.append("|".join(cell_texts))
+            return f"table:{table_width}:{';'.join(row_texts)}"
+        return f"table:{table_width}"
 
     # Handle rich_text fields
     rich_text = content.get("rich_text", [])
@@ -169,14 +189,26 @@ def generate_diff_positional(
                     "index": local_idx
                 })
             elif notion_block.get("type") == local_block.get("type"):
-                # Same type, different content - update
-                ops.append({
-                    "op": "UPDATE",
-                    "notion_block_id": notion_block["id"],
-                    "notion_block": notion_block,
-                    "local_block": local_block,
-                    "index": local_idx
-                })
+                block_type = notion_block.get("type")
+                # Tables need REPLACE because table_row cells can't be updated via PATCH
+                # See: https://developers.notion.com/reference/update-a-block
+                if block_type == "table":
+                    ops.append({
+                        "op": "REPLACE",
+                        "notion_block_id": notion_block["id"],
+                        "notion_block": notion_block,
+                        "local_block": local_block,
+                        "index": local_idx
+                    })
+                else:
+                    # Same type, different content - update
+                    ops.append({
+                        "op": "UPDATE",
+                        "notion_block_id": notion_block["id"],
+                        "notion_block": notion_block,
+                        "local_block": local_block,
+                        "index": local_idx
+                    })
             else:
                 # Different type - replace (delete + insert)
                 ops.append({
@@ -270,14 +302,26 @@ def generate_diff(
                 new_block = new_blocks[li]
 
                 if old_block.get("type") == new_block.get("type"):
-                    # Same type, different content - update
-                    ops.append({
-                        "op": "UPDATE",
-                        "notion_block_id": old_block["id"],
-                        "notion_block": old_block,
-                        "local_block": new_block,
-                        "index": result_index
-                    })
+                    block_type = old_block.get("type")
+                    # Tables need REPLACE because children can't be updated via PATCH
+                    # The Notion API only allows updating table metadata, not row content
+                    if block_type == "table":
+                        ops.append({
+                            "op": "REPLACE",
+                            "notion_block_id": old_block["id"],
+                            "notion_block": old_block,
+                            "local_block": new_block,
+                            "index": result_index
+                        })
+                    else:
+                        # Same type, different content - update
+                        ops.append({
+                            "op": "UPDATE",
+                            "notion_block_id": old_block["id"],
+                            "notion_block": old_block,
+                            "local_block": new_block,
+                            "index": result_index
+                        })
                 else:
                     # Different type - replace
                     ops.append({

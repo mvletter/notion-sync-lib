@@ -9,7 +9,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .client import RateLimitedNotionClient
+    from app.lib.notion_sync.client import RateLimitedNotionClient
 
 logger = logging.getLogger(__name__)
 
@@ -203,9 +203,20 @@ def extract_block_text(block: dict) -> str:
     if block_type == "divider":
         return "---"
 
-    # Table - return identifying info
+    # Table - return identifying info AND content if children available
     if block_type == "table":
         width = block_data.get("table_width", 0)
+        # Check for children (local blocks have 'children', fetched blocks have '_children')
+        children = block.get("_children") or block_data.get("children", [])
+        if children:
+            # Extract text from all table rows
+            row_texts = []
+            for child in children:
+                if child.get("type") == "table_row":
+                    cells = child.get("table_row", {}).get("cells", [])
+                    cell_texts = [_extract_rich_text(cell) for cell in cells]
+                    row_texts.append("|".join(cell_texts))
+            return f"table:{width}:{';'.join(row_texts)}"
         return f"table:{width}"
 
     # Table row - extract cell contents

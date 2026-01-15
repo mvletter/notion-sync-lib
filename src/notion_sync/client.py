@@ -6,7 +6,7 @@ from typing import Any
 
 from notion_client import Client, APIResponseError
 
-from .utils import get_notion_token
+from app.lib.notion_sync.utils import get_notion_token
 
 logger = logging.getLogger(__name__)
 
