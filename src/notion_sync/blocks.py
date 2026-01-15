@@ -9,7 +9,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.lib.notion_sync.client import RateLimitedNotionClient
+    from notion_sync.client import RateLimitedNotionClient
 
 logger = logging.getLogger(__name__)
 

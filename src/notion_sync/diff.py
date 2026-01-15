@@ -11,7 +11,7 @@ import logging
 from difflib import SequenceMatcher
 from typing import Any
 
-from app.lib.notion_sync.client import RateLimitedNotionClient
+from notion_sync.client import RateLimitedNotionClient
 
 logger = logging.getLogger(__name__)
 
