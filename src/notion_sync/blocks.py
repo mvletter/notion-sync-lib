@@ -143,7 +143,7 @@ def extract_block_text(block: dict) -> str:
       Returns the plain text from rich_text
     - Code blocks: Returns text with language annotation
     - Divider: Returns "---"
-    - Table: Returns "table:{width}"
+    - Table: Returns "table:{width}:{row_contents}" for content-based comparison
     - Image/video/file/pdf/bookmark: Returns URL or caption
     - Embed: Returns the embed URL
     - Equation: Returns the expression
@@ -358,7 +358,7 @@ def append_blocks(
     Append blocks to a Notion page.
 
     Batches blocks in groups of 100 to respect Notion API limits.
-    Optionally inserts after a specific block ID.
+    Tracks last inserted block ID across batches to maintain correct order.
 
     Args:
         client: RateLimitedNotionClient instance
@@ -378,6 +378,7 @@ def append_blocks(
     # Notion API limit is 100 blocks per request
     batch_size = 100
     appended_count = 0
+    last_block_id = after  # Track position across batches
 
     for i in range(0, len(blocks), batch_size):
         batch = blocks[i:i + batch_size]
@@ -389,10 +390,13 @@ def append_blocks(
         )
 
         try:
-            # Only use 'after' for the first batch
-            after_id = after if i == 0 else None
-            client.append_blocks(page_id, batch, after=after_id)
+            # Use tracked position for all batches (not just first)
+            result = client.append_blocks(page_id, batch, after=last_block_id)
             appended_count += len(batch)
+
+            # Track last inserted block for next batch positioning
+            if result.get("results"):
+                last_block_id = result["results"][-1]["id"]
         except Exception as e:
             logger.error(f"Failed to append batch {batch_num}: {e}")
             raise

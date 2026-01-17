@@ -12,18 +12,13 @@ from notion_sync.blocks import (
 from notion_sync.diff import (
     # Diff generation
     generate_diff,
-    generate_diff_positional,
     generate_recursive_diff,
     # Diff execution
     execute_diff,
     execute_recursive_diff,
-    # Leading insert handling
-    has_leading_inserts,
-    handle_leading_inserts,
     # Utilities
     format_diff_preview,
     create_content_hash,
-    blocks_equal,
     extract_block_text as extract_block_text_diff,
 )
 
@@ -43,17 +38,12 @@ __all__ = [
     "append_blocks",
     # Diff generation
     "generate_diff",
-    "generate_diff_positional",
     "generate_recursive_diff",
     # Diff execution
     "execute_diff",
     "execute_recursive_diff",
-    # Leading insert handling
-    "has_leading_inserts",
-    "handle_leading_inserts",
     # Diff utilities
     "format_diff_preview",
     "create_content_hash",
-    "blocks_equal",
     "extract_block_text_diff",
 ]

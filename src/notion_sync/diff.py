@@ -2,10 +2,9 @@
 
 Provides content-based diff generation using SequenceMatcher to produce
 minimal operations when synchronizing local blocks with Notion pages.
-
-Also includes leading insert handling for Notion API limitation (no `before` parameter).
 """
 
+import copy
 import hashlib
 import logging
 from difflib import SequenceMatcher
@@ -14,11 +13,6 @@ from typing import Any
 from notion_sync.client import RateLimitedNotionClient
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# BLOCK COMPARISON
-# =============================================================================
 
 
 def extract_block_text(block: dict[str, Any]) -> str:
@@ -116,136 +110,6 @@ def create_content_hash(block: dict[str, Any]) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
-def blocks_equal(notion_block: dict[str, Any], local_block: dict[str, Any]) -> bool:
-    """Check if two blocks are equivalent (same type and content).
-
-    Used for position-based diff generation to determine if a block needs updating.
-
-    Args:
-        notion_block: Block from Notion API.
-        local_block: Block from local markdown conversion.
-
-    Returns:
-        True if blocks have same type and content.
-    """
-    # Type must match
-    if notion_block.get("type") != local_block.get("type"):
-        return False
-
-    block_type = notion_block.get("type")
-
-    # For code blocks, also compare language
-    if block_type == "code":
-        notion_lang = notion_block.get("code", {}).get("language", "")
-        local_lang = local_block.get("code", {}).get("language", "")
-        if notion_lang != local_lang:
-            return False
-
-    # Compare text content
-    notion_text = extract_block_text(notion_block)
-    local_text = extract_block_text(local_block)
-
-    return notion_text == local_text
-
-
-# =============================================================================
-# DIFF GENERATION
-# =============================================================================
-
-
-def generate_diff_positional(
-    notion_blocks: list[dict[str, Any]],
-    local_blocks: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Generate list of operations using position-based matching.
-
-    Simple position-based comparison. Use generate_diff for content-based
-    matching which produces better results when blocks are reordered.
-
-    Args:
-        notion_blocks: Current blocks in Notion.
-        local_blocks: Desired blocks from local markdown.
-
-    Returns:
-        List of operation dicts with op, notion_block_id, notion_block, local_block, index.
-    """
-    ops: list[dict[str, Any]] = []
-    notion_idx = 0
-    local_idx = 0
-
-    while notion_idx < len(notion_blocks) or local_idx < len(local_blocks):
-        notion_block = notion_blocks[notion_idx] if notion_idx < len(notion_blocks) else None
-        local_block = local_blocks[local_idx] if local_idx < len(local_blocks) else None
-
-        # Both exist at this position
-        if notion_block and local_block:
-            if blocks_equal(notion_block, local_block):
-                # Same - keep
-                ops.append({
-                    "op": "KEEP",
-                    "notion_block_id": notion_block["id"],
-                    "notion_block": notion_block,
-                    "local_block": None,
-                    "index": local_idx
-                })
-            elif notion_block.get("type") == local_block.get("type"):
-                block_type = notion_block.get("type")
-                # Tables need REPLACE because table_row cells can't be updated via PATCH
-                # See: https://developers.notion.com/reference/update-a-block
-                if block_type == "table":
-                    ops.append({
-                        "op": "REPLACE",
-                        "notion_block_id": notion_block["id"],
-                        "notion_block": notion_block,
-                        "local_block": local_block,
-                        "index": local_idx
-                    })
-                else:
-                    # Same type, different content - update
-                    ops.append({
-                        "op": "UPDATE",
-                        "notion_block_id": notion_block["id"],
-                        "notion_block": notion_block,
-                        "local_block": local_block,
-                        "index": local_idx
-                    })
-            else:
-                # Different type - replace (delete + insert)
-                ops.append({
-                    "op": "REPLACE",
-                    "notion_block_id": notion_block["id"],
-                    "notion_block": notion_block,
-                    "local_block": local_block,
-                    "index": local_idx
-                })
-            notion_idx += 1
-            local_idx += 1
-
-        # Only local block exists - insert
-        elif local_block:
-            ops.append({
-                "op": "INSERT",
-                "notion_block_id": None,
-                "notion_block": None,
-                "local_block": local_block,
-                "index": local_idx
-            })
-            local_idx += 1
-
-        # Only Notion block exists - delete
-        elif notion_block:
-            ops.append({
-                "op": "DELETE",
-                "notion_block_id": notion_block["id"],
-                "notion_block": notion_block,
-                "local_block": None,
-                "index": notion_idx
-            })
-            notion_idx += 1
-
-    return ops
-
-
 def generate_diff(
     old_blocks: list[dict[str, Any]],
     new_blocks: list[dict[str, Any]]
@@ -302,26 +166,14 @@ def generate_diff(
                 new_block = new_blocks[li]
 
                 if old_block.get("type") == new_block.get("type"):
-                    block_type = old_block.get("type")
-                    # Tables need REPLACE because children can't be updated via PATCH
-                    # The Notion API only allows updating table metadata, not row content
-                    if block_type == "table":
-                        ops.append({
-                            "op": "REPLACE",
-                            "notion_block_id": old_block["id"],
-                            "notion_block": old_block,
-                            "local_block": new_block,
-                            "index": result_index
-                        })
-                    else:
-                        # Same type, different content - update
-                        ops.append({
-                            "op": "UPDATE",
-                            "notion_block_id": old_block["id"],
-                            "notion_block": old_block,
-                            "local_block": new_block,
-                            "index": result_index
-                        })
+                    # Same type, different content - update
+                    ops.append({
+                        "op": "UPDATE",
+                        "notion_block_id": old_block["id"],
+                        "notion_block": old_block,
+                        "local_block": new_block,
+                        "index": result_index
+                    })
                 else:
                     # Different type - replace
                     ops.append({
@@ -450,166 +302,6 @@ def generate_recursive_diff(
     return ops
 
 
-# =============================================================================
-# LEADING INSERT HANDLING
-# =============================================================================
-
-
-def has_leading_inserts(ops: list[dict[str, Any]]) -> bool:
-    """Check if there are INSERTs before any KEEP/UPDATE operation.
-
-    Leading inserts are problematic because Notion's API doesn't have a `before`
-    parameter - inserts without `after` go to the END of the page.
-
-    Args:
-        ops: List of operations from generate_diff.
-
-    Returns:
-        True if there are INSERT operations before any KEEP/UPDATE.
-    """
-    for op in ops:
-        if op["op"] in ("KEEP", "UPDATE"):
-            return False
-        if op["op"] == "INSERT":
-            return True
-    return False
-
-
-def _recreate_block_content(notion_block: dict[str, Any]) -> dict[str, Any]:
-    """Recreate a block's content for re-insertion.
-
-    Extracts only the content fields needed to create a new block,
-    excluding metadata like id, created_time, etc.
-
-    Args:
-        notion_block: Original Notion block.
-
-    Returns:
-        Block dict suitable for inserting via API.
-    """
-    block_type = notion_block.get("type")
-    if not block_type:
-        return {}
-
-    content = notion_block.get(block_type, {})
-
-    # Build new block with just the content
-    new_block: dict[str, Any] = {"type": block_type, block_type: {}}
-
-    # Copy relevant fields based on block type
-    if block_type == "divider":
-        pass  # Divider has no content
-    elif block_type == "table":
-        new_block[block_type] = {
-            "table_width": content.get("table_width", 1),
-            "has_column_header": content.get("has_column_header", False),
-            "has_row_header": content.get("has_row_header", False)
-        }
-    else:
-        # Copy rich_text if present
-        if "rich_text" in content:
-            new_block[block_type]["rich_text"] = content["rich_text"]
-
-        # Block-specific fields
-        if block_type == "code":
-            new_block[block_type]["language"] = content.get("language", "plain text")
-        elif block_type == "to_do":
-            new_block[block_type]["checked"] = content.get("checked", False)
-
-    return new_block
-
-
-def handle_leading_inserts(
-    ops: list[dict[str, Any]],
-    client: RateLimitedNotionClient,
-    page_id: str
-) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Handle INSERTs that need to go before existing blocks.
-
-    Strategy: When we need to insert BEFORE the first existing block:
-    1. Find the first KEEP block
-    2. Delete that block (temporarily)
-    3. Insert our new blocks (now at start because no `after`)
-    4. Re-insert the deleted block
-    5. Continue normally
-
-    Args:
-        ops: List of operations from generate_diff.
-        client: RateLimitedNotionClient for API calls.
-        page_id: Notion page ID.
-
-    Returns:
-        Tuple of (modified_ops, block_id_mapping):
-        - modified_ops: ops with leading inserts adjusted
-        - block_id_mapping: {old_id: new_id} for re-inserted blocks
-    """
-    if not has_leading_inserts(ops):
-        return ops, {}
-
-    # Find the first KEEP block (this is what we'll delete/re-insert)
-    first_keep_idx = None
-    first_keep_op = None
-    for i, op in enumerate(ops):
-        if op["op"] in ("KEEP", "UPDATE"):
-            first_keep_idx = i
-            first_keep_op = op
-            break
-
-    # If no KEEP found, all blocks are new - no workaround needed
-    if first_keep_op is None:
-        return ops, {}
-
-    # Strategy: Delete the first KEEP block, let inserts go first, then re-insert
-    logger.debug(f"Handling leading inserts: will delete and re-insert block {first_keep_op['notion_block_id'][:8]}")
-
-    # Save the block content for re-creation
-    first_block = first_keep_op["notion_block"]
-    first_block_id = first_keep_op["notion_block_id"]
-
-    # Check if block is archived
-    if first_block.get("archived", False):
-        logger.warning("First KEEP block is archived - cannot use leading insert workaround")
-        return ops, {}
-
-    # Delete the first KEEP block
-    try:
-        client.delete_block(first_block_id)
-    except Exception as e:
-        logger.warning(f"Failed to delete first block for leading insert workaround: {e}")
-        return ops, {}
-
-    # Create the re-insert operation
-    reinsert_block = _recreate_block_content(first_block)
-
-    # Modify ops:
-    # 1. Remove the original KEEP
-    # 2. Add a special INSERT at the end of leading inserts
-    modified_ops: list[dict[str, Any]] = []
-
-    for i, op in enumerate(ops):
-        if i == first_keep_idx:
-            # Skip the original KEEP - we'll add it back as INSERT
-            # Insert it after all the leading INSERTs
-            modified_ops.append({
-                "op": "INSERT",
-                "notion_block_id": None,
-                "notion_block": first_block,  # Keep reference for mapping
-                "local_block": reinsert_block,
-                "index": op["index"],
-                "_was_keep": True,  # Mark for later mapping
-                "_original_id": first_block_id
-            })
-        else:
-            modified_ops.append(op)
-
-    return modified_ops, {"deleted_for_leading": first_block_id}
-
-
-# =============================================================================
-# DIFF EXECUTION
-# =============================================================================
-
-
 def execute_recursive_diff(
     client: RateLimitedNotionClient,
     ops: list[dict[str, Any]],
@@ -626,8 +318,12 @@ def execute_recursive_diff(
         Stats dict with counts: {updated, skipped}
     """
     stats = {"updated": 0, "skipped": 0}
+    total_ops = len(ops)
 
-    for op in ops:
+    # Log progress every 20 blocks
+    progress_interval = 20
+
+    for i, op in enumerate(ops):
         if op["op"] != "UPDATE":
             logger.warning(f"Unexpected operation type: {op['op']}")
             continue
@@ -651,18 +347,40 @@ def execute_recursive_diff(
 
         # Execute update
         try:
-            block_type = local_block["type"]
-            block_content = local_block[block_type]
+            local_type = local_block["type"]
+            notion_type = op["notion_block"].get("type")
 
-            # For callout blocks, only update rich_text (icon requires special handling)
-            if block_type == "callout":
-                update_data = {block_type: {"rich_text": block_content.get("rich_text", [])}}
+            # Check for block type mismatch (master vs slave structure difference)
+            if local_type != notion_type:
+                logger.warning(
+                    f"Block type mismatch at {path}: local={local_type}, notion={notion_type}. "
+                    "Skipping - slave page structure differs from master."
+                )
+                if "type_mismatch" not in stats:
+                    stats["type_mismatch"] = 0
+                stats["type_mismatch"] += 1
+                continue
+
+            block_content = local_block[local_type]
+
+            # For certain block types, only update rich_text to avoid Notion API errors:
+            # - callout: icon property requires special handling
+            # - toggle: "Cannot remove toggle...children first" error
+            # - heading_1/2/3: same error when is_toggleable is included in update
+            #   (validated: even setting is_toggleable=false on non-toggleable heading triggers error)
+            rich_text_only_blocks = ("callout", "toggle", "heading_1", "heading_2", "heading_3")
+            if local_type in rich_text_only_blocks:
+                update_data = {local_type: {"rich_text": block_content.get("rich_text", [])}}
             else:
-                update_data = {block_type: block_content}
+                update_data = {local_type: block_content}
 
             client.update_block(block_id=block_id, data=update_data)
             stats["updated"] += 1
             logger.debug(f"Updated block at {path}")
+
+            # Log progress every N blocks
+            if (i + 1) % progress_interval == 0 or (i + 1) == total_ops:
+                logger.info(f"Diff progress: {i + 1}/{total_ops} blocks processed")
         except Exception as e:
             logger.error(f"Failed to update block at {path}: {e}")
             raise
@@ -670,27 +388,55 @@ def execute_recursive_diff(
     return stats
 
 
+def _delete_block_recursive(client: RateLimitedNotionClient, block_id: str) -> int:
+    """Delete a block and all its children (bottom-up).
+
+    Notion API requires children to be deleted before their parent.
+    This function recursively fetches and deletes children first.
+
+    Args:
+        client: RateLimitedNotionClient instance for API calls.
+        block_id: ID of the block to delete.
+
+    Returns:
+        Number of blocks deleted (including children).
+    """
+    deleted_count = 0
+
+    # First, check if block has children and delete them
+    try:
+        children = client.get_blocks(block_id)
+        for child in children:
+            if not child.get("archived", False):
+                # Recursively delete child (and its children)
+                deleted_count += _delete_block_recursive(client, child["id"])
+    except Exception as e:
+        # Block might not support children, that's ok
+        logger.debug(f"Could not fetch children for {block_id}: {e}")
+
+    # Now delete the block itself
+    client.delete_block(block_id=block_id)
+    deleted_count += 1
+
+    return deleted_count
+
+
 def execute_diff(
     client: RateLimitedNotionClient,
     ops: list[dict[str, Any]],
     page_id: str,
-    dry_run: bool = False,
-    handle_leading: bool = True
+    dry_run: bool = False
 ) -> dict[str, int]:
     """Execute diff operations using Notion API.
 
     Processes operations in order, tracking last_block_id for correct
     insertion positioning using the `after` parameter.
 
-    Handles leading inserts (INSERTs before existing blocks) by temporarily
-    deleting and re-inserting the first KEEP block.
-
     Args:
         client: RateLimitedNotionClient instance for API calls.
         ops: List of operations from generate_diff.
         page_id: Notion page ID to sync to.
         dry_run: If True, only count operations without executing.
-        handle_leading: If True, handle leading inserts automatically.
 
     Returns:
         Stats dict with counts: {kept, updated, inserted, deleted, replaced}
@@ -715,10 +461,6 @@ def execute_diff(
                 stats["deleted"] += 1
         return stats
 
-    # Handle leading inserts if needed (modifies ops)
-    if handle_leading:
-        ops, _mapping = handle_leading_inserts(ops, client, page_id)
-
     last_block_id: str | None = None
 
     for op in ops:
@@ -742,8 +484,13 @@ def execute_diff(
                 else:
                     block_type = op["local_block"]["type"]
                     block_content = op["local_block"][block_type].copy()
-                    # For callout blocks, only update rich_text (icon requires special handling)
-                    if block_type == "callout":
+                    # For certain block types, only update rich_text to avoid Notion API errors:
+                    # - callout: icon property requires special handling
+                    # - toggle: "Cannot remove toggle...children first" error
+                    # - heading_1/2/3: same error when is_toggleable is included in update
+                    #   (validated: even setting is_toggleable=false on non-toggleable heading triggers error)
+                    rich_text_only_blocks = ("callout", "toggle", "heading_1", "heading_2", "heading_3")
+                    if block_type in rich_text_only_blocks:
                         update_data = {block_type: {"rich_text": block_content.get("rich_text", [])}}
                     else:
                         # Remove children - can't update children via block update API
@@ -760,27 +507,16 @@ def execute_diff(
                         op["index"]
                     )
                 else:
-                    client.delete_block(block_id=op["notion_block_id"])
+                    # Use recursive delete to handle blocks with children (e.g., toggles)
+                    _delete_block_recursive(client, op["notion_block_id"])
                     stats["deleted"] += 1
 
             elif op["op"] == "INSERT":
-                blocks_to_insert = [op["local_block"]]
-                if last_block_id:
-                    # Use the underlying notion client for after parameter
-                    result = client.notion.blocks.children.append(
-                        block_id=page_id,
-                        children=blocks_to_insert,
-                        after=last_block_id
-                    )
-                else:
-                    result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert)
+                blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
+                # Use rate-limited append_blocks method (not direct API call)
+                result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                 last_block_id = result["results"][0]["id"]
-
-                # Special handling for re-inserted KEEP blocks (from leading insert workaround)
-                if op.get("_was_keep"):
-                    stats["kept"] += 1
-                else:
-                    stats["inserted"] += 1
+                stats["inserted"] += 1
 
             elif op["op"] == "REPLACE":
                 if is_archived:
@@ -789,28 +525,17 @@ def execute_diff(
                         op["index"]
                     )
                     last_block_id = op["notion_block_id"]
-                    blocks_to_insert = [op["local_block"]]
-                    if last_block_id:
-                        result = client.notion.blocks.children.append(
-                            block_id=page_id,
-                            children=blocks_to_insert,
-                            after=last_block_id
-                        )
-                    else:
-                        result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert)
+                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
+                    # Use rate-limited append_blocks method (not direct API call)
+                    result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
                     stats["inserted"] += 1
                 else:
-                    client.delete_block(block_id=op["notion_block_id"])
-                    blocks_to_insert = [op["local_block"]]
-                    if last_block_id:
-                        result = client.notion.blocks.children.append(
-                            block_id=page_id,
-                            children=blocks_to_insert,
-                            after=last_block_id
-                        )
-                    else:
-                        result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert)
+                    # Use recursive delete to handle blocks with children (e.g., toggles)
+                    _delete_block_recursive(client, op["notion_block_id"])
+                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
+                    # Use rate-limited append_blocks method (not direct API call)
+                    result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
                     stats["replaced"] += 1
 
@@ -822,6 +547,24 @@ def execute_diff(
             raise
 
     return stats
+
+
+def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
+    """Deep copy a block and remove internal properties not accepted by Notion API.
+
+    Notion API (since version 2021-08-16) rejects requests with unknown properties.
+    The _children property is used internally by Herald for recursive block trees
+    but must be removed before sending to Notion.
+
+    Args:
+        block: A block dictionary that may contain _children.
+
+    Returns:
+        A deep copy of the block with _children removed at all levels.
+    """
+    cleaned = copy.deepcopy(block)
+    cleaned.pop("_children", None)
+    return cleaned
 
 
 def _truncate(text: str, max_len: int) -> str:
