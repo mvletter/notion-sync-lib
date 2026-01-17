@@ -269,8 +269,15 @@ def extract_block_text(block: dict) -> str:
         return f"link:{url}"
 
     # Structural blocks - return type identifier
-    if block_type in {"table_of_contents", "breadcrumb", "column_list", "column"}:
+    if block_type in {"table_of_contents", "breadcrumb", "column_list"}:
         return block_type
+
+    # Column blocks - include width_ratio if present
+    if block_type == "column":
+        width_ratio = block_data.get("width_ratio")
+        if width_ratio is not None:
+            return f"column:{width_ratio}"
+        return "column"
 
     # Child page/database - return title if available
     if block_type == "child_page":

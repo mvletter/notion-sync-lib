@@ -104,6 +104,11 @@ def create_content_hash(block: dict[str, Any]) -> str:
     elif block_type == "code":
         type_data = block.get(block_type, {})
         extras = f":lang={type_data.get('language', 'plain text')}"
+    elif block_type == "column":
+        type_data = block.get(block_type, {})
+        width_ratio = type_data.get("width_ratio")
+        if width_ratio is not None:
+            extras = f":width={width_ratio}"
 
     # Create normalized string and hash
     normalized = f"{block_type}:{text}{extras}"

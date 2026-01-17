@@ -9,6 +9,13 @@ from notion_sync.blocks import (
     delete_all_blocks,
     append_blocks,
 )
+from notion_sync.columns import (
+    extract_block_ids,
+    build_column_list_block,
+    create_column_list,
+    read_column_content,
+    unwrap_column_list,
+)
 from notion_sync.diff import (
     # Diff generation
     generate_diff,
@@ -36,6 +43,12 @@ __all__ = [
     "extract_block_text",
     "delete_all_blocks",
     "append_blocks",
+    # Columns
+    "extract_block_ids",
+    "build_column_list_block",
+    "create_column_list",
+    "read_column_content",
+    "unwrap_column_list",
     # Diff generation
     "generate_diff",
     "generate_recursive_diff",

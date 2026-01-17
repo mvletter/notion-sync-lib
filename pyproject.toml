@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "notion-sync-lib"
-version = "0.2.0"
+version = "0.3.0"
 description = "Rate-limited Notion API client with smart diff-based sync"
 readme = "README.md"
 license = "MIT"
