@@ -53,13 +53,12 @@ def extract_block_ids(blocks: list[dict], prefix: str = "") -> dict[str, str]:
 # =============================================================================
 
 
-def build_column_list_block(
+def _build_column_list_block(
     columns: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Build a column_list block structure for Notion API.
 
-    Creates a properly structured column_list block with columns and their
-    content. Each column can have a width_ratio to control relative widths.
+    Internal helper - use create_column_list() for the public API.
 
     Args:
         columns: List of column dicts, each with:
@@ -68,13 +67,6 @@ def build_column_list_block(
 
     Returns:
         Complete column_list block dict ready for Notion API.
-
-    Example:
-        >>> columns = [
-        ...     {"children": [{"type": "paragraph", "paragraph": {...}}], "width_ratio": 0.7},
-        ...     {"children": [{"type": "paragraph", "paragraph": {...}}], "width_ratio": 0.3},
-        ... ]
-        >>> block = build_column_list_block(columns)
     """
     column_children = []
 
@@ -122,19 +114,13 @@ def create_column_list(
             - block_ids: Dict mapping paths to IDs (from extract_block_ids)
             - results: Raw API response results
     """
-    from notion_sync.blocks import fetch_blocks_recursive
+    from notion_sync.fetch import fetch_blocks_recursive
 
     # Build and create the column_list
-    column_list_block = build_column_list_block(columns)
+    column_list_block = _build_column_list_block(columns)
 
-    if after:
-        result = client.notion.blocks.children.append(
-            block_id=page_id,
-            children=[column_list_block],
-            after=after
-        )
-    else:
-        result = client.append_blocks(page_id, [column_list_block])
+    # Use rate-limited append_blocks (supports after parameter)
+    result = client.append_blocks(page_id, [column_list_block], after=after)
 
     column_list_id = result["results"][0]["id"]
     logger.info(f"Created column_list {column_list_id[:12]}...")
@@ -174,7 +160,7 @@ def read_column_content(
             - width_ratio: Column width ratio (if set)
             - blocks: List of content blocks in the column
     """
-    from notion_sync.blocks import fetch_blocks_recursive
+    from notion_sync.fetch import fetch_blocks_recursive
 
     # Fetch column_list children (columns)
     columns = client.get_blocks(column_list_id)
@@ -266,18 +252,8 @@ def unwrap_column_list(
             "deleted": False,
         }
 
-    # Create flat blocks
-    if after:
-        result = client.notion.blocks.children.append(
-            block_id=page_id,
-            children=flat_blocks,
-            after=after
-        )
-    else:
-        result = client.notion.blocks.children.append(
-            block_id=page_id,
-            children=flat_blocks
-        )
+    # Create flat blocks using rate-limited append_blocks
+    result = client.append_blocks(page_id, flat_blocks, after=after)
 
     new_block_ids = [b["id"] for b in result.get("results", [])]
     logger.info(f"Created {len(new_block_ids)} flat blocks from column_list")
@@ -286,7 +262,7 @@ def unwrap_column_list(
     deleted = False
     if delete_original:
         try:
-            client.notion.blocks.delete(block_id=column_list_id)
+            client.delete_block(column_list_id)
             logger.info(f"Deleted column_list {column_list_id}")
             deleted = True
         except Exception as e:

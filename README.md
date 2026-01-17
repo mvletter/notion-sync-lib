@@ -1,6 +1,5 @@
 # notion-sync-lib
 
-[![PyPI version](https://badge.fury.io/py/notion-sync-lib.svg)](https://pypi.org/project/notion-sync-lib/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -12,12 +11,12 @@ Rate-limited Notion API client with smart diff-based sync.
 - **Block operations**: Fetch, create, update, and delete Notion blocks
 - **Recursive fetching**: Fetch entire page trees including nested children
 - **Smart diff sync**: Content-based diffing using SequenceMatcher for minimal API calls
-- **Leading insert handling**: Workaround for Notion API's lack of `before` parameter
+- **Column support**: Create and manipulate column layouts
 
 ## Installation
 
 ```bash
-pip install notion-sync-lib
+pip install git+https://github.com/mvletter/notion-sync-lib.git
 ```
 
 Or install from source:
@@ -45,7 +44,7 @@ NOTION_API_TOKEN=secret_xxx
 ### Basic Usage
 
 ```python
-from notion_sync import get_notion_client, extract_page_id
+from notion_sync import get_notion_client, extract_page_id, extract_page_title
 
 # Create a rate-limited client
 client = get_notion_client()
@@ -121,6 +120,31 @@ print(f"Stats: {stats}")
 # Output: {'kept': 5, 'updated': 2, 'inserted': 1, 'deleted': 0, 'replaced': 0}
 ```
 
+### Recursive Diff (for translation sync)
+
+When syncing translations where the block structure is identical:
+
+```python
+from notion_sync import (
+    get_notion_client,
+    fetch_blocks_recursive,
+    generate_recursive_diff,
+    execute_recursive_diff,
+)
+
+client = get_notion_client()
+
+# Fetch original and translated blocks (same structure)
+original_blocks = fetch_blocks_recursive(client, original_page_id)
+translated_blocks = inject_translations(original_blocks, translations)
+
+# Generate UPDATE-only operations
+ops = generate_recursive_diff(original_blocks, translated_blocks)
+
+# Execute updates
+stats = execute_recursive_diff(client, ops, dry_run=False)
+```
+
 ### Diff Operations
 
 The diff generates these operation types:
@@ -131,9 +155,23 @@ The diff generates these operation types:
 - `INSERT`: New block - uses append API with `after` positioning
 - `DELETE`: Block removed - uses delete API
 
+## Module Structure
+
+```
+notion_sync/
+├── client.py    # Rate-limited API wrapper
+├── fetch.py     # Block fetching (top-level and recursive)
+├── extract.py   # Text extraction from blocks
+├── modify.py    # Block deletion and appending
+├── diff.py      # Smart diff generation and execution
+├── columns.py   # Column layout operations
+├── utils.py     # Token and URL utilities
+└── blocks.py    # Re-exports for backwards compatibility
+```
+
 ## API Reference
 
-### Client
+### Client (`notion_sync.client`)
 
 #### `get_notion_client() -> RateLimitedNotionClient`
 Factory function to create a configured client. Reads `NOTION_API_TOKEN` from environment.
@@ -152,32 +190,42 @@ Methods:
 - `update_block(block_id, data)` - Update block content
 - `update_page_title(page_id, title)` - Update page title
 
-### Utils
+### Fetch (`notion_sync.fetch`)
+
+- `fetch_page_blocks(client, page_id)` - Fetch top-level blocks only
+- `fetch_blocks_recursive(client, page_id)` - Fetch all blocks with nested children under `_children` key
+
+### Extract (`notion_sync.extract`)
+
+- `extract_block_text(block)` - Get plain text from any block type
+- `extract_rich_text(rich_text)` - Get plain text from a rich_text array
+
+### Modify (`notion_sync.modify`)
+
+- `delete_all_blocks(client, page_id)` - Clear all blocks from a page
+- `append_blocks(client, page_id, blocks, after=None)` - Batch append with 100-block limit
+
+### Diff (`notion_sync.diff`)
+
+- `generate_diff(old_blocks, new_blocks)` - Content-based diff (use when structure may change)
+- `generate_recursive_diff(old_blocks, new_blocks)` - Diff for identical structure, UPDATE-only
+- `execute_diff(client, ops, page_id, dry_run=False)` - Apply full diff operations
+- `execute_recursive_diff(client, ops, dry_run=False)` - Apply UPDATE-only operations
+- `format_diff_preview(ops)` - Human-readable diff summary
+- `create_content_hash(block)` - Stable hash for content matching
+
+### Columns (`notion_sync.columns`)
+
+- `extract_block_ids(blocks, prefix="")` - Extract path-to-ID mapping from block tree
+- `create_column_list(client, page_id, columns, after=None)` - Create column_list and return IDs
+- `read_column_content(client, column_list_id)` - Read all column content
+- `unwrap_column_list(client, page_id, column_list_id, ...)` - Flatten columns to blocks
+
+### Utils (`notion_sync.utils`)
 
 - `get_notion_token()` - Get API token from environment
 - `extract_page_id(url)` - Extract and format page ID from Notion URL
 - `extract_page_title(page)` - Get plain text title from page object
-
-### Blocks
-
-- `fetch_page_blocks(client, page_id)` - Fetch top-level blocks
-- `fetch_blocks_recursive(client, page_id)` - Fetch all blocks with children
-- `extract_block_text(block)` - Get plain text from any block type
-- `delete_all_blocks(client, page_id)` - Clear all blocks from page
-- `append_blocks(client, page_id, blocks, after=None)` - Batch append with 100-block limit
-
-### Diff
-
-- `generate_diff(old_blocks, new_blocks)` - Content-based diff using SequenceMatcher
-- `generate_diff_positional(notion_blocks, local_blocks)` - Simple position-based diff
-- `generate_recursive_diff(old_blocks, new_blocks)` - Diff for trees with identical structure
-- `execute_diff(client, ops, page_id, dry_run=False)` - Apply diff operations
-- `execute_recursive_diff(client, ops, dry_run=False)` - Apply UPDATE-only operations
-- `format_diff_preview(ops)` - Human-readable diff summary
-- `create_content_hash(block)` - Stable hash for content matching
-- `blocks_equal(notion_block, local_block)` - Compare two blocks
-- `has_leading_inserts(ops)` - Check for inserts before existing blocks
-- `handle_leading_inserts(ops, client, page_id)` - Workaround for leading inserts
 
 ## License
 

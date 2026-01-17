@@ -11,71 +11,9 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
+from notion_sync.extract import extract_block_text
 
 logger = logging.getLogger(__name__)
-
-
-def extract_block_text(block: dict[str, Any]) -> str:
-    """Extract plain text content from a block for comparison.
-
-    Works with both Notion API blocks and local blocks (from markdown_to_notion_blocks).
-    Notion API blocks have plain_text field, local blocks have text.content.
-
-    Args:
-        block: A Notion block dictionary.
-
-    Returns:
-        Plain text content of the block, or empty string if no text content.
-    """
-    block_type = block.get("type")
-    if not block_type:
-        return ""
-
-    content = block.get(block_type, {})
-
-    # Handle divider first (no text content)
-    if block_type == "divider":
-        return "---"
-
-    # Handle table blocks - compare structure AND content
-    if block_type == "table":
-        table_width = content.get("table_width", 0)
-        # Check for children (local blocks have 'children', fetched blocks have '_children')
-        children = block.get("_children") or content.get("children", [])
-        if children:
-            # Extract text from all table rows
-            row_texts = []
-            for child in children:
-                if child.get("type") == "table_row":
-                    cells = child.get("table_row", {}).get("cells", [])
-                    cell_texts = []
-                    for cell in cells:
-                        # Extract text from each cell's rich_text
-                        if isinstance(cell, list):
-                            for segment in cell:
-                                if "plain_text" in segment:
-                                    cell_texts.append(segment["plain_text"])
-                                elif "text" in segment and "content" in segment["text"]:
-                                    cell_texts.append(segment["text"]["content"])
-                    row_texts.append("|".join(cell_texts))
-            return f"table:{table_width}:{';'.join(row_texts)}"
-        return f"table:{table_width}"
-
-    # Handle rich_text fields
-    rich_text = content.get("rich_text", [])
-    if rich_text:
-        # Extract text from each segment
-        texts = []
-        for segment in rich_text:
-            # Notion API format: has plain_text
-            if "plain_text" in segment:
-                texts.append(segment["plain_text"])
-            # Local format: has text.content
-            elif "text" in segment and "content" in segment["text"]:
-                texts.append(segment["text"]["content"])
-        return "".join(texts)
-
-    return ""
 
 
 def create_content_hash(block: dict[str, Any]) -> str:

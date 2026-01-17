@@ -1,62 +1,77 @@
-"""Notion Sync Library - Rate-limited Notion API client with utilities."""
+"""Notion Sync Library - Rate-limited Notion API client with smart diff-based sync.
 
+Module structure:
+- client: Rate-limited API wrapper
+- fetch: Block fetching (top-level and recursive)
+- extract: Text extraction from blocks
+- modify: Block deletion and appending
+- diff: Smart diff generation and execution
+- columns: Column layout operations
+- utils: Token and URL utilities
+
+For backwards compatibility, blocks.py re-exports from fetch, extract, and modify.
+"""
+
+# Client
 from notion_sync.client import get_notion_client, RateLimitedNotionClient
-from notion_sync.utils import get_notion_token, extract_page_id, extract_page_title
-from notion_sync.blocks import (
-    fetch_page_blocks,
-    fetch_blocks_recursive,
-    extract_block_text,
-    delete_all_blocks,
-    append_blocks,
+
+# Fetch operations
+from notion_sync.fetch import fetch_page_blocks, fetch_blocks_recursive
+
+# Extract operations
+from notion_sync.extract import extract_block_text, extract_rich_text
+
+# Modify operations
+from notion_sync.modify import delete_all_blocks, append_blocks
+
+# Diff operations
+from notion_sync.diff import (
+    generate_diff,
+    generate_recursive_diff,
+    execute_diff,
+    execute_recursive_diff,
+    format_diff_preview,
+    create_content_hash,
 )
+
+# Column operations
 from notion_sync.columns import (
     extract_block_ids,
-    build_column_list_block,
     create_column_list,
     read_column_content,
     unwrap_column_list,
 )
-from notion_sync.diff import (
-    # Diff generation
-    generate_diff,
-    generate_recursive_diff,
-    # Diff execution
-    execute_diff,
-    execute_recursive_diff,
-    # Utilities
-    format_diff_preview,
-    create_content_hash,
-    extract_block_text as extract_block_text_diff,
-)
+
+# Utils
+from notion_sync.utils import get_notion_token, extract_page_id, extract_page_title
 
 __all__ = [
     # Client
     "get_notion_client",
     "RateLimitedNotionClient",
+    # Fetch
+    "fetch_page_blocks",
+    "fetch_blocks_recursive",
+    # Extract
+    "extract_block_text",
+    "extract_rich_text",
+    # Modify
+    "delete_all_blocks",
+    "append_blocks",
+    # Diff
+    "generate_diff",
+    "generate_recursive_diff",
+    "execute_diff",
+    "execute_recursive_diff",
+    "format_diff_preview",
+    "create_content_hash",
+    # Columns
+    "extract_block_ids",
+    "create_column_list",
+    "read_column_content",
+    "unwrap_column_list",
     # Utils
     "get_notion_token",
     "extract_page_id",
     "extract_page_title",
-    # Blocks
-    "fetch_page_blocks",
-    "fetch_blocks_recursive",
-    "extract_block_text",
-    "delete_all_blocks",
-    "append_blocks",
-    # Columns
-    "extract_block_ids",
-    "build_column_list_block",
-    "create_column_list",
-    "read_column_content",
-    "unwrap_column_list",
-    # Diff generation
-    "generate_diff",
-    "generate_recursive_diff",
-    # Diff execution
-    "execute_diff",
-    "execute_recursive_diff",
-    # Diff utilities
-    "format_diff_preview",
-    "create_content_hash",
-    "extract_block_text_diff",
 ]
