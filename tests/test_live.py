@@ -15,6 +15,8 @@ from notion_sync import (
     fetch_blocks_recursive,
     append_blocks,
     delete_all_blocks,
+    generate_diff,
+    execute_diff,
 )
 
 # Load .env file
@@ -193,3 +195,62 @@ def test_nested_blocks(test_page):
     from notion_sync import extract_block_text
     assert extract_block_text(fetched[0]["_children"][0]) == "Child 1"
     assert extract_block_text(fetched[0]["_children"][1]) == "Child 2"
+
+
+def test_diff_update(test_page):
+    """Test updating content via diff.
+
+    Scenario #2: Update via diff
+    - Start met pagina met paragraph "Version 1"
+    - Wijzig naar "Version 2" via diff
+    - Assert: 1 UPDATE operatie (geen DELETE + INSERT)
+    - Fetch terug → Content is "Version 2"
+    """
+    client = get_notion_client()
+
+    # Create initial content
+    initial_blocks = [
+        {
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": "Version 1"}}]
+            }
+        }
+    ]
+    append_blocks(client, test_page, initial_blocks)
+
+    # Fetch current state
+    current_blocks = fetch_blocks_recursive(client, test_page)
+
+    # New desired content
+    new_blocks = [
+        {
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": "Version 2"}}]
+            }
+        }
+    ]
+
+    # Generate diff
+    ops = generate_diff(current_blocks, new_blocks)
+
+    # Assert: should have 1 UPDATE operation (not DELETE + INSERT)
+    update_ops = [op for op in ops if op["op"] == "UPDATE"]
+    delete_ops = [op for op in ops if op["op"] == "DELETE"]
+    insert_ops = [op for op in ops if op["op"] == "INSERT"]
+
+    assert len(update_ops) == 1, f"Expected 1 UPDATE, got {len(update_ops)}"
+    assert len(delete_ops) == 0, f"Expected 0 DELETE, got {len(delete_ops)}"
+    assert len(insert_ops) == 0, f"Expected 0 INSERT, got {len(insert_ops)}"
+
+    # Execute diff
+    stats = execute_diff(client, ops, test_page, dry_run=False)
+
+    # Verify stats
+    assert stats["updated"] == 1
+
+    # Fetch back and verify content
+    fetched = fetch_blocks_recursive(client, test_page)
+    from notion_sync import extract_block_text
+    assert extract_block_text(fetched[0]) == "Version 2"
