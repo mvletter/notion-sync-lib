@@ -15,6 +15,15 @@ from notion_sync.extract import extract_block_text
 
 logger = logging.getLogger(__name__)
 
+# Block types that can only have rich_text updated (not full content)
+# These require special handling to avoid Notion API errors:
+# - callout: icon property requires special handling
+# - toggle: "Cannot remove toggle...children first" error
+# - heading_1/2/3: is_toggleable triggers error even when false
+_RICH_TEXT_ONLY_BLOCKS = frozenset([
+    "callout", "toggle", "heading_1", "heading_2", "heading_3"
+])
+
 
 def create_content_hash(block: dict[str, Any]) -> str:
     """Create a stable hash for a Notion block based on its content.
@@ -61,6 +70,16 @@ def generate_diff(
 
     Uses difflib.SequenceMatcher to match blocks by content hash instead of position.
     This produces minimal operations when blocks are inserted/deleted at any position.
+
+    **USE THIS WHEN:**
+    - Pages have different structures (different number of blocks)
+    - You're adding, removing, or reordering blocks
+    - Syncing content from external sources (markdown, tests, etc.)
+    - Block structures may not match
+
+    **DON'T USE THIS WHEN:**
+    - Both pages have identical structure (same block IDs at same positions)
+    - You only need to update text content (use generate_recursive_diff instead)
 
     Args:
         old_blocks: Current blocks in Notion (notion_blocks).
@@ -186,13 +205,44 @@ def generate_recursive_diff(
     Unlike generate_diff which only compares top-level blocks, this function
     walks both trees in parallel and compares content at every level.
 
-    Assumes both trees have identical structure (same block IDs in same positions).
-    This is the case when new_blocks comes from inject_translations, which
-    deep-copies the original blocks and only modifies text content.
+    **USE THIS WHEN:**
+    - Both pages have identical structure (same block IDs at same positions)
+    - You only need to update content (not add/remove/reorder blocks)
+    - new_blocks is a modified copy of old_blocks (same structure, different content)
+
+    **DON'T USE THIS WHEN:**
+    - Pages have different structures → Use generate_diff instead
+    - You need to add, remove, or reorder blocks → Use generate_diff instead
+    - Syncing between different pages → Use generate_diff instead
+
+    **WARNING:**
+    If structures don't match, this function will return an empty list (0 operations)
+    because it assumes identical block IDs at identical positions.
+
+    **TYPICAL USE CASE:**
+    When you fetch a page, modify only the content in a copy, and want to sync
+    those content changes back. For example: translation workflows, bulk text updates,
+    content replacement, property changes.
+
+    Example workflow:
+    ```python
+    # 1. Fetch original blocks
+    original = fetch_blocks_recursive(client, page_id)
+
+    # 2. Create modified copy (same structure, different content)
+    modified = copy.deepcopy(original)
+    # ... modify text/properties in modified, keep IDs unchanged ...
+
+    # 3. Generate UPDATE operations only
+    ops = generate_recursive_diff(original, modified)
+
+    # 4. Execute updates
+    execute_recursive_diff(client, ops)
+    ```
 
     Args:
         old_blocks: Current blocks in Notion (with _children from recursive fetch).
-        new_blocks: Translated blocks (with _children from inject_translations).
+        new_blocks: Modified copy with same structure, different content.
 
     Returns:
         List of UPDATE operation dicts for all blocks with changed content.
@@ -200,7 +250,7 @@ def generate_recursive_diff(
         - op: "UPDATE"
         - notion_block_id: Block ID to update
         - notion_block: Original block (for reference)
-        - local_block: New block with translated content
+        - local_block: New block with modified content
         - path: Human-readable path like "0", "0.children.1"
     """
     ops: list[dict[str, Any]] = []
@@ -251,6 +301,13 @@ def execute_recursive_diff(
     dry_run: bool = False,
 ) -> dict[str, int]:
     """Execute recursive diff operations (UPDATE only).
+
+    **USE WITH:** generate_recursive_diff output only
+    **NOT FOR:** generate_diff output (use execute_diff instead)
+
+    This function only handles UPDATE operations. If you pass operations
+    from generate_diff (which includes INSERT/DELETE), they will be skipped
+    with a warning.
 
     Args:
         client: RateLimitedNotionClient instance for API calls.
@@ -306,13 +363,8 @@ def execute_recursive_diff(
 
             block_content = local_block[local_type]
 
-            # For certain block types, only update rich_text to avoid Notion API errors:
-            # - callout: icon property requires special handling
-            # - toggle: "Cannot remove toggle...children first" error
-            # - heading_1/2/3: same error when is_toggleable is included in update
-            #   (validated: even setting is_toggleable=false on non-toggleable heading triggers error)
-            rich_text_only_blocks = ("callout", "toggle", "heading_1", "heading_2", "heading_3")
-            if local_type in rich_text_only_blocks:
+            # Use restricted update for certain block types
+            if local_type in _RICH_TEXT_ONLY_BLOCKS:
                 update_data = {local_type: {"rich_text": block_content.get("rich_text", [])}}
             else:
                 update_data = {local_type: block_content}
@@ -332,10 +384,11 @@ def execute_recursive_diff(
 
 
 def _delete_block_recursive(client: RateLimitedNotionClient, block_id: str) -> int:
-    """Delete a block and all its children (bottom-up).
+    """Delete a block and all its children (bottom-up) using iterative approach.
 
     Notion API requires children to be deleted before their parent.
-    This function recursively fetches and deletes children first.
+    This function uses a stack-based iterative approach to handle deep trees
+    without risk of stack overflow.
 
     Args:
         client: RateLimitedNotionClient instance for API calls.
@@ -344,22 +397,46 @@ def _delete_block_recursive(client: RateLimitedNotionClient, block_id: str) -> i
     Returns:
         Number of blocks deleted (including children).
     """
+    # Build a complete tree of block IDs to delete (depth-first)
+    to_process = [block_id]
+    all_blocks = []  # List of (block_id, depth) tuples
+
+    while to_process:
+        current_id = to_process.pop(0)
+
+        # Fetch children
+        try:
+            children = client.get_blocks(current_id)
+            child_ids = [c["id"] for c in children if not c.get("archived", False)]
+
+            # Add children to front of processing queue (depth-first)
+            to_process = child_ids + to_process
+
+            # Record this block and its depth (children come before parents)
+            all_blocks.extend((child_id, 0) for child_id in child_ids)
+            all_blocks.append((current_id, 0))
+        except Exception as e:
+            # Block might not support children, that's ok
+            logger.debug(f"Could not fetch children for {current_id}: {e}")
+            all_blocks.append((current_id, 0))
+
+    # Delete in reverse order (children before parents)
+    # Use a set to deduplicate block IDs
+    seen = set()
+    to_delete = []
+    for block_id, _ in reversed(all_blocks):
+        if block_id not in seen:
+            seen.add(block_id)
+            to_delete.append(block_id)
+
+    # Execute deletes
     deleted_count = 0
-
-    # First, check if block has children and delete them
-    try:
-        children = client.get_blocks(block_id)
-        for child in children:
-            if not child.get("archived", False):
-                # Recursively delete child (and its children)
-                deleted_count += _delete_block_recursive(client, child["id"])
-    except Exception as e:
-        # Block might not support children, that's ok
-        logger.debug(f"Could not fetch children for {block_id}: {e}")
-
-    # Now delete the block itself
-    client.delete_block(block_id=block_id)
-    deleted_count += 1
+    for block_id in to_delete:
+        try:
+            client.delete_block(block_id=block_id)
+            deleted_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to delete block {block_id}: {e}")
 
     return deleted_count
 
@@ -372,6 +449,10 @@ def execute_diff(
 ) -> dict[str, int]:
     """Execute diff operations using Notion API.
 
+    **USE WITH:** generate_diff output
+    **NOT FOR:** generate_recursive_diff output (use execute_recursive_diff instead)
+
+    Handles all operation types: KEEP, UPDATE, INSERT, DELETE, REPLACE.
     Processes operations in order, tracking last_block_id for correct
     insertion positioning using the `after` parameter.
 
@@ -427,13 +508,8 @@ def execute_diff(
                 else:
                     block_type = op["local_block"]["type"]
                     block_content = op["local_block"][block_type].copy()
-                    # For certain block types, only update rich_text to avoid Notion API errors:
-                    # - callout: icon property requires special handling
-                    # - toggle: "Cannot remove toggle...children first" error
-                    # - heading_1/2/3: same error when is_toggleable is included in update
-                    #   (validated: even setting is_toggleable=false on non-toggleable heading triggers error)
-                    rich_text_only_blocks = ("callout", "toggle", "heading_1", "heading_2", "heading_3")
-                    if block_type in rich_text_only_blocks:
+                    # Use restricted update for certain block types
+                    if block_type in _RICH_TEXT_ONLY_BLOCKS:
                         update_data = {block_type: {"rich_text": block_content.get("rich_text", [])}}
                     else:
                         # Remove children - can't update children via block update API
@@ -493,20 +569,34 @@ def execute_diff(
 
 
 def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
-    """Deep copy a block and remove internal properties not accepted by Notion API.
+    """Deep copy a block and convert from internal format to Notion API format.
 
-    Notion API (since version 2021-08-16) rejects requests with unknown properties.
-    The _children property is used internally by Herald for recursive block trees
-    but must be removed before sending to Notion.
+    Converts blocks from fetch_blocks_recursive format (with _children at root)
+    to Notion API format (with children inside block type property).
+
+    # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
 
     Args:
         block: A block dictionary that may contain _children.
 
     Returns:
-        A deep copy of the block with _children removed at all levels.
+        A deep copy of the block in Notion API format.
     """
     cleaned = copy.deepcopy(block)
-    cleaned.pop("_children", None)
+
+    # Convert _children to proper API format
+    # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
+    children = cleaned.pop("_children", None)
+    if children:
+        block_type = cleaned.get("type")
+        if block_type and block_type in cleaned:
+            # Recursively prepare each child block
+            # For toggles: _children → toggle.children
+            # For column_list: _children → column_list.children (each child is a column)
+            # For columns: _children → column.children
+            prepared_children = [_prepare_block_for_api(child) for child in children]
+            cleaned[block_type]["children"] = prepared_children
+
     return cleaned
 
 

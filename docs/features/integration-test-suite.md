@@ -24,7 +24,7 @@ Scripts die checken of de library werkt tegen echte Notion pagina's. Maakt een t
 
 **Evidence**:
 - TEST_PAGE_ID staat in .env maar wordt niet gebruikt
-- Handmatig testen via Herald kost tijd
+- Handmatig testen kost tijd
 - Bij nieuwe features geen check of het echt werkt
 
 **Current workaround**: Handmatig testen
@@ -218,22 +218,66 @@ Delete `tests/test_live_*.py` and `tests/conftest.py`
 - [x] T1-T4: Basic test setup (fixture, create/fetch, diff UPDATE, clone)
 - [x] Extended diff operations: DELETE, INSERT, REPLACE
 - [x] Restructured: Split into modules with shared helpers
-- [x] 7 tests total in 3 files
+- [x] Column tests: create_column_list, unwrap_column_list
+- [x] **Fixed auto-sync bug**: Changed from `generate_recursive_diff` to `generate_diff`
+- [x] **Added logging**: Full pytest logging with verification after each sync
+- [x] **Fixed nested blocks**: `_prepare_block_for_api` now converts `_children` recursively
+- [x] **Common block types**: Lists, to_do, code, quote, callout, divider
+- [x] **Advanced operations**: INSERT middle, DELETE middle, nested operations
+- [x] **Rich text formatting**: Bold, italic, links
+- [x] **User action tests**: Manual reorder, delete all verification
+- [x] **25 tests total in 6 files** (23 automated + 2 manual user action tests)
 
-**Test coverage**:
-- ✅ Create & fetch blocks
-- ✅ Nested blocks (toggle with children)
-- ✅ Diff UPDATE (paragraph text change)
-- ✅ Diff DELETE (remove block)
-- ✅ Diff INSERT (add new block)
-- ✅ Diff REPLACE (change block type)
-- ✅ Clone and sync (master/clone remain identical)
+**Test coverage by file**:
+
+`test_live_basic.py` (2 tests):
+- ✅ Test #1: Create & fetch blocks (heading, paragraph)
+- ✅ Test #2: Nested blocks (toggle with children)
+
+`test_live_diff.py` (4 tests):
+- ✅ Test #3: Diff UPDATE (paragraph text change)
+- ✅ Test #5: Diff DELETE (remove block)
+- ✅ Test #6: Diff INSERT (add new block at end)
+- ✅ Test #7: Diff REPLACE (change block type)
+
+`test_live_columns.py` (2 tests):
+- ✅ Test #9: Columns: create 2-column layout with width_ratio
+- ✅ Test #10: Columns: unwrap to flat blocks
+
+`test_live_block_types.py` (7 tests):
+- ✅ Test #11: bulleted_list (3 items)
+- ✅ Test #12: numbered_list (2 items)
+- ✅ Test #13: to_do (checked and unchecked)
+- ✅ Test #14: code (python and javascript with language property)
+- ✅ Test #15: quote
+- ✅ Test #16: callout (with emoji icon)
+- ✅ Test #17: divider
+
+`test_live_advanced.py` (8 tests):
+- ✅ Test #18: INSERT middle (block tussen bestaande)
+- ✅ Test #19: DELETE middle (block uit midden verwijderen)
+- ✅ Test #20: UPDATE nested content (child in toggle wijzigen via API)
+- ✅ Test #21: INSERT child in toggle (append child via API)
+- ✅ Test #22: DELETE child from toggle (delete child via API)
+- ✅ Test #23: Deep nesting (3 levels: toggle → toggle → paragraph)
+- ✅ Test #24: Rich text formatting (bold, italic, link)
+- ✅ Test #25: Bulk INSERT (15 blocks in 1 operation)
+
+`test_live_zz_user_actions.py` (2 tests - require manual user actions):
+- ✅ Test #98: USER REORDER (user manually reorders blocks A,B,C → C,A,B, then sync to clone)
+- ✅ Test #99: DELETE ALL (user deletes all blocks, verify both pages empty)
+
+**Auto-sync mechanism**:
+- ✅ Works correctly with `generate_diff` + `execute_diff`
+- ✅ Logs block counts and operation counts
+- ✅ Verifies clone has same number of blocks after sync
+- ✅ Handles nested blocks (toggles, column_list) correctly
+- ✅ Skips auto-sync for user action tests (#98, #99) which handle syncing manually
 
 **Not yet tested**:
-- ❌ Columns (create_column_list, unwrap, diff with columns)
-- ❌ Deep nesting (3+ levels)
-- ❌ Bulk operations (>10 blocks)
-- ❌ Special block types (code, quote, divider, lists)
+- ❌ Bulk operations (>100 blocks) - currently tested up to 15
+- ❌ generate_recursive_diff + execute_recursive_diff (UPDATE-only workflow for translations)
 - ❌ Empty content edge cases
-
-**Next**: Column operations tests
+- ❌ Tables (table + table_row blocks)
+- ❌ Bookmarks
+- ❌ Images/files

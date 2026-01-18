@@ -77,3 +77,16 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Local development files
+.claude/
+prompts/
+project.md
+.playbook-version
+docs/architecture.md
+docs/database.md
+docs/decisions.md
+docs/patterns.md
+docs/system.md
+docs/inbox.md
+docs/features/

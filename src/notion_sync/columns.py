@@ -5,12 +5,38 @@ Handles column layout operations including width_ratio preservation.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     from notion_sync.client import RateLimitedNotionClient
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# TYPE DEFINITIONS
+# =============================================================================
+
+
+class ColumnCreationResult(TypedDict):
+    """Result from create_column_list operation."""
+    column_list_id: str
+    block_ids: dict[str, str]
+    results: list[dict]
+
+
+class ColumnContent(TypedDict):
+    """Content from a single column."""
+    column_id: str
+    width_ratio: float | None
+    blocks: list[dict[str, Any]]
+
+
+class UnwrapResult(TypedDict):
+    """Result from unwrap_column_list operation."""
+    new_block_ids: list[str]
+    source_blocks: list[dict[str, Any]]
+    deleted: bool
 
 
 # =============================================================================
@@ -96,7 +122,7 @@ def create_column_list(
     page_id: str,
     columns: list[dict[str, Any]],
     after: str | None = None,
-) -> dict[str, Any]:
+) -> ColumnCreationResult:
     """Create a column_list in Notion and return the created structure.
 
     Builds and appends a column_list block to the specified page, then
@@ -105,16 +131,47 @@ def create_column_list(
     Args:
         client: RateLimitedNotionClient instance.
         page_id: Notion page ID to append to.
-        columns: List of column dicts (see build_column_list_block).
+        columns: List of column dicts, each with:
+            - children: List of blocks for column content (required)
+            - width_ratio: Optional float between 0 and 1 for column width
         after: Optional block ID to insert after.
 
     Returns:
-        Dict with:
+        ColumnCreationResult with:
             - column_list_id: ID of created column_list
             - block_ids: Dict mapping paths to IDs (from extract_block_ids)
             - results: Raw API response results
+
+    Raises:
+        ValueError: If columns is empty or invalid.
+        TypeError: If columns parameter is not a list.
     """
     from notion_sync.fetch import fetch_blocks_recursive
+
+    # Input validation
+    if not isinstance(columns, list):
+        raise TypeError(f"columns must be a list, got {type(columns).__name__}")
+
+    if not columns:
+        raise ValueError("columns must be a non-empty list")
+
+    for i, col in enumerate(columns):
+        if not isinstance(col, dict):
+            raise TypeError(f"Column {i} must be a dict, got {type(col).__name__}")
+
+        if "children" not in col:
+            raise ValueError(f"Column {i} missing required 'children' key")
+
+        if not isinstance(col["children"], list):
+            raise TypeError(f"Column {i} 'children' must be a list, got {type(col['children']).__name__}")
+
+        # Validate width_ratio if present
+        if "width_ratio" in col:
+            ratio = col["width_ratio"]
+            if not isinstance(ratio, (int, float)):
+                raise TypeError(f"Column {i} width_ratio must be a number, got {type(ratio).__name__}")
+            if ratio < 0 or ratio > 1:
+                raise ValueError(f"Column {i} width_ratio must be between 0 and 1, got {ratio}")
 
     # Build and create the column_list
     column_list_block = _build_column_list_block(columns)
@@ -144,7 +201,7 @@ def create_column_list(
 def read_column_content(
     client: "RateLimitedNotionClient",
     column_list_id: str,
-) -> list[dict[str, Any]]:
+) -> list[ColumnContent]:
     """Read content from all columns in a column_list.
 
     Fetches all columns and their content blocks, returning a structured
@@ -155,7 +212,7 @@ def read_column_content(
         column_list_id: ID of the column_list to read.
 
     Returns:
-        List of dicts, one per column, each with:
+        List of ColumnContent dicts, one per column, each with:
             - column_id: ID of the column block
             - width_ratio: Column width ratio (if set)
             - blocks: List of content blocks in the column
@@ -197,7 +254,7 @@ def unwrap_column_list(
     column_list_id: str,
     after: str | None = None,
     delete_original: bool = True,
-) -> dict[str, Any]:
+) -> UnwrapResult:
     """Unwrap a column_list to flat blocks.
 
     Extracts all content blocks from columns and creates them as flat
@@ -211,7 +268,7 @@ def unwrap_column_list(
         delete_original: Whether to delete the column_list after unwrapping.
 
     Returns:
-        Dict with:
+        UnwrapResult with:
             - new_block_ids: List of IDs of created flat blocks
             - source_blocks: List of original block data (with column context)
             - deleted: Whether the column_list was deleted
@@ -267,6 +324,7 @@ def unwrap_column_list(
             deleted = True
         except Exception as e:
             logger.error(f"Failed to delete column_list: {e}")
+            raise
 
     return {
         "new_block_ids": new_block_ids,

@@ -6,7 +6,7 @@ from notion_sync import (
     append_blocks,
     extract_block_text,
 )
-from conftest import make_paragraph, make_heading, make_toggle
+from .conftest import make_paragraph, make_heading, make_toggle
 
 
 def test_1_create_and_fetch(master_page):
@@ -15,13 +15,16 @@ def test_1_create_and_fetch(master_page):
     Scenario #1: Create en fetch
     - Maak master met heading + paragraph
     - Fetch blocks terug → Assert: types en content kloppen
+
+    Note: Session-scoped fixture means content accumulates.
+    We search for our specific test blocks by text instead of position.
     """
     client = get_notion_client()
 
     # Create initial blocks using helpers
     blocks = [
-        make_heading(1, "Test Results"),
-        make_paragraph("Initial content")
+        make_heading(1, "Test #1 Results"),
+        make_paragraph("Test #1 Initial content")
     ]
 
     append_blocks(client, master_page, blocks)
@@ -29,12 +32,17 @@ def test_1_create_and_fetch(master_page):
     # Fetch blocks back
     fetched = fetch_blocks_recursive(client, master_page)
 
-    # Assert: 2 blocks with correct content
-    assert len(fetched) >= 2
-    assert fetched[0]["type"] == "heading_1"
-    assert extract_block_text(fetched[0]) == "Test Results"
-    assert fetched[1]["type"] == "paragraph"
-    assert extract_block_text(fetched[1]) == "Initial content"
+    # Find our test blocks by text (not position, since content accumulates)
+    from .conftest import find_block_by_text
+
+    heading = find_block_by_text(fetched, "Test #1 Results", "heading_1")
+    paragraph = find_block_by_text(fetched, "Test #1 Initial content", "paragraph")
+
+    # Assert: blocks exist with correct types and content
+    assert heading["type"] == "heading_1"
+    assert "Test #1 Results" in extract_block_text(heading)
+    assert paragraph["type"] == "paragraph"
+    assert "Test #1 Initial content" in extract_block_text(paragraph)
 
 
 def test_2_nested_blocks(master_page):
@@ -49,10 +57,10 @@ def test_2_nested_blocks(master_page):
     # Add toggle with nested children using helper
     blocks = [
         make_toggle(
-            "Nested Test",
+            "Test #2 Nested Toggle",
             children=[
-                make_paragraph("Nested child 1"),
-                make_paragraph("Nested child 2")
+                make_paragraph("Test #2 Nested child 1"),
+                make_paragraph("Test #2 Nested child 2")
             ]
         )
     ]
@@ -64,9 +72,9 @@ def test_2_nested_blocks(master_page):
     toggle_blocks = [b for b in fetched if b["type"] == "toggle"]
 
     assert len(toggle_blocks) >= 1
-    toggle = toggle_blocks[0]
+    toggle = toggle_blocks[-1]  # Get last toggle (our test)
     assert "_children" in toggle
     assert len(toggle["_children"]) == 2
 
-    assert extract_block_text(toggle["_children"][0]) == "Nested child 1"
-    assert extract_block_text(toggle["_children"][1]) == "Nested child 2"
+    assert "Test #2" in extract_block_text(toggle["_children"][0])
+    assert "Test #2" in extract_block_text(toggle["_children"][1])

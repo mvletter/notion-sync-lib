@@ -6,10 +6,9 @@ Module structure:
 - extract: Text extraction from blocks
 - modify: Block deletion and appending
 - diff: Smart diff generation and execution
-- columns: Column layout operations
+- columns: Column layout operations (with TypedDict return types)
+- builders: Block creation utilities for testing and content generation
 - utils: Token and URL utilities
-
-For backwards compatibility, blocks.py re-exports from fetch, extract, and modify.
 """
 
 # Client
@@ -40,6 +39,24 @@ from notion_sync.columns import (
     create_column_list,
     read_column_content,
     unwrap_column_list,
+    # TypedDict types for column operations
+    ColumnCreationResult,
+    ColumnContent,
+    UnwrapResult,
+)
+
+# Block builders
+from notion_sync.builders import (
+    make_paragraph,
+    make_heading,
+    make_toggle,
+    make_bulleted_list_item,
+    make_numbered_list_item,
+    make_to_do,
+    make_code,
+    make_callout,
+    make_quote,
+    make_divider,
 )
 
 # Utils
@@ -70,6 +87,20 @@ __all__ = [
     "create_column_list",
     "read_column_content",
     "unwrap_column_list",
+    "ColumnCreationResult",
+    "ColumnContent",
+    "UnwrapResult",
+    # Builders
+    "make_paragraph",
+    "make_heading",
+    "make_toggle",
+    "make_bulleted_list_item",
+    "make_numbered_list_item",
+    "make_to_do",
+    "make_code",
+    "make_callout",
+    "make_quote",
+    "make_divider",
     # Utils
     "get_notion_token",
     "extract_page_id",
