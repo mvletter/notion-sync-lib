@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2025-01-18
+
+### 🎉 Production Release
+
+This release marks the library as production-ready with comprehensive documentation, code quality improvements, and proven stability in production environments.
+
+### Added
+
+- **Block builders module** (`builders.py`):
+  - `make_paragraph`, `make_heading`, `make_toggle`, `make_bulleted_list_item`
+  - `make_numbered_list_item`, `make_to_do`, `make_code`, `make_callout`
+  - `make_quote`, `make_divider`
+- **TypedDict return types** for better IDE autocomplete:
+  - `ColumnCreationResult`, `ColumnContent`, `UnwrapResult`
+- **Input validation** on all public functions (type checking, range validation)
+- **Complete documentation suite**:
+  - Comprehensive usage guide with 5 real-world implementations
+  - Full API reference documentation
+  - Development and contributing guide
+  - Common pitfalls documentation
+
+### Changed
+
+- **Iterative deletion**: Rewrote `_delete_block_recursive` to use iterative approach (prevents stack overflow)
+- **Error handling**: Added proper re-raise after logging (no error swallowing)
+- **Code organization**: Removed code duplication with shared constants
+- **Development Status**: Updated from Beta to Production/Stable
+
+### Removed
+
+- **Backwards compatibility module** (`blocks.py`): Removed deprecated import shim
+
 ## [0.3.0] - 2025-01-17
 
 ### Added
@@ -30,8 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Sync with Herald's battle-tested version
 - Improved error handling and logging throughout
+- Synced with production-tested version
 
 ### Fixed
 
@@ -53,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Import paths corrected for standalone pip installation
 
+[1.0.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v1.0.0
 [0.3.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v0.2.0
 [0.1.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v0.1.0

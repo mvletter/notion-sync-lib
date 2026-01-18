@@ -1,11 +1,12 @@
-"""Tests for notion_sync.columns module."""
+"""Tests for notion_sync.columns module.
+
+Note: Tests for create_column_list are in test_live_columns.py as integration tests.
+The _build_column_list_block helper is tested indirectly through those tests.
+"""
 
 import pytest
 
-from notion_sync.columns import (
-    extract_block_ids,
-    build_column_list_block,
-)
+from notion_sync.columns import extract_block_ids
 
 
 class TestExtractBlockIds:
@@ -119,93 +120,3 @@ class TestExtractBlockIds:
         blocks = [{"id": "aaa", "type": "paragraph"}]
         result = extract_block_ids(blocks, prefix="5.children.")
         assert result == {"5.children.0": "aaa"}
-
-
-class TestBuildColumnListBlock:
-    """Tests for build_column_list_block function."""
-
-    def test_two_columns_simple(self):
-        """Basic two-column structure."""
-        columns = [
-            {"children": [{"type": "paragraph", "paragraph": {"rich_text": []}}]},
-            {"children": [{"type": "paragraph", "paragraph": {"rich_text": []}}]},
-        ]
-        result = build_column_list_block(columns)
-
-        assert result["type"] == "column_list"
-        assert len(result["column_list"]["children"]) == 2
-        assert result["column_list"]["children"][0]["type"] == "column"
-        assert result["column_list"]["children"][1]["type"] == "column"
-
-    def test_columns_with_width_ratio(self):
-        """Width ratio is preserved in column data."""
-        columns = [
-            {"children": [], "width_ratio": 0.7},
-            {"children": [], "width_ratio": 0.3},
-        ]
-        result = build_column_list_block(columns)
-
-        assert result["column_list"]["children"][0]["column"]["width_ratio"] == 0.7
-        assert result["column_list"]["children"][1]["column"]["width_ratio"] == 0.3
-
-    def test_columns_without_width_ratio(self):
-        """Columns without width_ratio don't have the key."""
-        columns = [
-            {"children": []},
-            {"children": []},
-        ]
-        result = build_column_list_block(columns)
-
-        assert "width_ratio" not in result["column_list"]["children"][0]["column"]
-        assert "width_ratio" not in result["column_list"]["children"][1]["column"]
-
-    def test_mixed_width_ratio(self):
-        """Mix of columns with and without width_ratio."""
-        columns = [
-            {"children": [], "width_ratio": 0.5},
-            {"children": []},  # No width_ratio
-        ]
-        result = build_column_list_block(columns)
-
-        assert result["column_list"]["children"][0]["column"]["width_ratio"] == 0.5
-        assert "width_ratio" not in result["column_list"]["children"][1]["column"]
-
-    def test_multiple_blocks_per_column(self):
-        """Multiple content blocks per column."""
-        columns = [
-            {
-                "children": [
-                    {"type": "paragraph", "paragraph": {}},
-                    {"type": "heading_1", "heading_1": {}},
-                ]
-            },
-            {
-                "children": [
-                    {"type": "divider", "divider": {}},
-                ]
-            },
-        ]
-        result = build_column_list_block(columns)
-
-        col1_children = result["column_list"]["children"][0]["column"]["children"]
-        col2_children = result["column_list"]["children"][1]["column"]["children"]
-
-        assert len(col1_children) == 2
-        assert len(col2_children) == 1
-
-    def test_empty_columns(self):
-        """Empty columns list returns valid structure."""
-        result = build_column_list_block([])
-        assert result["type"] == "column_list"
-        assert result["column_list"]["children"] == []
-
-    def test_three_columns(self):
-        """Three columns work correctly."""
-        columns = [
-            {"children": [], "width_ratio": 0.33},
-            {"children": [], "width_ratio": 0.34},
-            {"children": [], "width_ratio": 0.33},
-        ]
-        result = build_column_list_block(columns)
-
-        assert len(result["column_list"]["children"]) == 3

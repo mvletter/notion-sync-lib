@@ -2,7 +2,7 @@
 
 import pytest
 
-from notion_sync.blocks import extract_block_text
+from notion_sync.extract import extract_block_text
 from notion_sync.diff import create_content_hash
 
 
