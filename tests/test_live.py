@@ -17,6 +17,8 @@ from notion_sync import (
     delete_all_blocks,
     generate_diff,
     execute_diff,
+    generate_recursive_diff,
+    execute_recursive_diff,
 )
 
 # Load .env file
@@ -254,3 +256,120 @@ def test_diff_update(test_page):
     fetched = fetch_blocks_recursive(client, test_page)
     from notion_sync import extract_block_text
     assert extract_block_text(fetched[0]) == "Version 2"
+
+
+def test_clone_and_sync(test_page):
+    """Test cloning a page and keeping master and clone in sync.
+
+    Scenario #3: Clone en sync
+    - Maak master met heading + paragraph
+    - Clone → "Test Clone"
+    - Assert: Clone heeft identieke blocks
+    - Wijzig master paragraph naar "Updated"
+    - Pas zelfde wijziging toe op clone
+    - Fetch beide → Assert: master blocks == clone blocks
+    """
+    client = get_notion_client()
+
+    # Create master content
+    master_blocks = [
+        {
+            "type": "heading_1",
+            "heading_1": {
+                "rich_text": [{"type": "text", "text": {"content": "Master Page"}}]
+            }
+        },
+        {
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": "Original content"}}]
+            }
+        }
+    ]
+    append_blocks(client, test_page, master_blocks)
+
+    # Create clone page
+    parent_id = os.getenv("TEST_PAGE_ID")
+    clone_response = client.notion.pages.create(
+        parent={"page_id": parent_id},
+        properties={
+            "title": {
+                "title": [
+                    {
+                        "text": {"content": "Test Clone (auto-generated)"}
+                    }
+                ]
+            }
+        }
+    )
+    clone_page_id = clone_response["id"]
+
+    try:
+        # Clone content to clone page
+        master_content = fetch_blocks_recursive(client, test_page)
+
+        # Remove IDs and Notion metadata before cloning
+        clean_blocks = []
+        for block in master_content:
+            clean_block = {"type": block["type"]}
+            clean_block[block["type"]] = block[block["type"]].copy()
+            # Remove id, created_time, etc - just keep content
+            if "rich_text" in clean_block[block["type"]]:
+                clean_block[block["type"]]["rich_text"] = block[block["type"]]["rich_text"]
+            clean_blocks.append(clean_block)
+
+        append_blocks(client, clone_page_id, clean_blocks)
+
+        # Verify clone has identical content
+        clone_content = fetch_blocks_recursive(client, clone_page_id)
+        assert len(clone_content) == len(master_content)
+
+        from notion_sync import extract_block_text
+        for i, (master_block, clone_block) in enumerate(zip(master_content, clone_content)):
+            assert master_block["type"] == clone_block["type"]
+            assert extract_block_text(master_block) == extract_block_text(clone_block)
+
+        # Update master paragraph
+        updated_blocks = [
+            {
+                "type": "heading_1",
+                "heading_1": {
+                    "rich_text": [{"type": "text", "text": {"content": "Master Page"}}]
+                }
+            },
+            {
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": "Updated content"}}]
+                }
+            }
+        ]
+
+        # Apply update to master via diff
+        master_current = fetch_blocks_recursive(client, test_page)
+        master_ops = generate_diff(master_current, updated_blocks)
+        execute_diff(client, master_ops, test_page, dry_run=False)
+
+        # Apply same update to clone via diff
+        clone_current = fetch_blocks_recursive(client, clone_page_id)
+        clone_ops = generate_diff(clone_current, updated_blocks)
+        execute_diff(client, clone_ops, clone_page_id, dry_run=False)
+
+        # Fetch both and verify they're identical
+        final_master = fetch_blocks_recursive(client, test_page)
+        final_clone = fetch_blocks_recursive(client, clone_page_id)
+
+        assert len(final_master) == len(final_clone)
+        for master_block, clone_block in zip(final_master, final_clone):
+            assert master_block["type"] == clone_block["type"]
+            assert extract_block_text(master_block) == extract_block_text(clone_block)
+            # Check specifically that both have "Updated content"
+            if master_block["type"] == "paragraph":
+                assert extract_block_text(master_block) == "Updated content"
+
+    finally:
+        # Cleanup clone page
+        try:
+            delete_all_blocks(client, clone_page_id)
+        except Exception as e:
+            print(f"Warning: Cleanup failed for clone page {clone_page_id}: {e}")
