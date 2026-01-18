@@ -79,3 +79,117 @@ def test_fixture_creates_page(test_page):
     # If we get here, fixture worked (didn't skip, created page)
     assert test_page is not None
     assert len(test_page) > 0
+
+
+def test_create_and_fetch(test_page):
+    """Test creating blocks and fetching them back.
+
+    Scenario #1: Create en fetch
+    - Maak pagina "Test Master" met:
+      - Heading 1: "Test Page"
+      - Paragraph: "Initial content"
+    - Fetch blocks terug → Assert: 2 blocks, types kloppen, content klopt
+    """
+    client = get_notion_client()
+
+    # Create blocks
+    blocks = [
+        {
+            "type": "heading_1",
+            "heading_1": {
+                "rich_text": [{"type": "text", "text": {"content": "Test Page"}}]
+            }
+        },
+        {
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": "Initial content"}}]
+            }
+        }
+    ]
+
+    append_blocks(client, test_page, blocks)
+
+    # Fetch blocks back
+    fetched = fetch_blocks_recursive(client, test_page)
+
+    # Assert: 2 blocks
+    assert len(fetched) == 2
+
+    # Assert: types correct
+    assert fetched[0]["type"] == "heading_1"
+    assert fetched[1]["type"] == "paragraph"
+
+    # Assert: content correct
+    from notion_sync import extract_block_text
+    assert extract_block_text(fetched[0]) == "Test Page"
+    assert extract_block_text(fetched[1]) == "Initial content"
+
+
+def test_empty_page(test_page):
+    """Test fetching from empty page.
+
+    Scenario #4: Lege pagina
+    - Maak pagina zonder blocks
+    - Fetch → Assert: empty list, geen error
+    """
+    client = get_notion_client()
+
+    # Don't add any blocks, just fetch
+    fetched = fetch_blocks_recursive(client, test_page)
+
+    # Assert: empty list
+    assert fetched == []
+    assert isinstance(fetched, list)
+
+
+def test_nested_blocks(test_page):
+    """Test fetching nested blocks.
+
+    Scenario #5: Nested blocks
+    - Maak toggle met 2 nested paragraphs
+    - Fetch recursive → Assert: toggle heeft _children met 2 items
+    """
+    client = get_notion_client()
+
+    # Create toggle with nested children
+    blocks = [
+        {
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [{"type": "text", "text": {"content": "Toggle block"}}],
+                "children": [
+                    {
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [{"type": "text", "text": {"content": "Child 1"}}]
+                        }
+                    },
+                    {
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [{"type": "text", "text": {"content": "Child 2"}}]
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+
+    append_blocks(client, test_page, blocks)
+
+    # Fetch recursive
+    fetched = fetch_blocks_recursive(client, test_page)
+
+    # Assert: 1 toggle block
+    assert len(fetched) == 1
+    assert fetched[0]["type"] == "toggle"
+
+    # Assert: toggle has _children with 2 items
+    assert "_children" in fetched[0]
+    assert len(fetched[0]["_children"]) == 2
+
+    # Assert: children content
+    from notion_sync import extract_block_text
+    assert extract_block_text(fetched[0]["_children"][0]) == "Child 1"
+    assert extract_block_text(fetched[0]["_children"][1]) == "Child 2"
