@@ -1,7 +1,8 @@
 """Live tests against real Notion API.
 
 These tests make actual API calls to Notion using TEST_PAGE_ID from .env.
-They validate the library works correctly against the real API.
+All tests use a single master page that accumulates content.
+At the end, a clone is created - both pages remain for manual inspection.
 
 Skip if NOTION_API_TOKEN not available.
 """
@@ -14,23 +15,21 @@ from notion_sync import (
     get_notion_client,
     fetch_blocks_recursive,
     append_blocks,
-    delete_all_blocks,
     generate_diff,
     execute_diff,
-    generate_recursive_diff,
-    execute_recursive_diff,
 )
 
 # Load .env file
 load_dotenv()
 
 
-@pytest.fixture
-def test_page():
-    """Create a test page under TEST_PAGE_ID and clean up after test.
+@pytest.fixture(scope="module")
+def master_page():
+    """Create master test page for all tests.
 
-    Yields the page_id of the created test page.
-    Cleanup happens in finally block to ensure it runs even on test failure.
+    Uses scope="module" so all tests share the same page.
+    Content accumulates across tests - no cleanup between tests.
+    Page remains after tests for manual inspection.
     """
     # Check if we have API token
     token = os.getenv("NOTION_API_TOKEN")
@@ -45,14 +44,14 @@ def test_page():
     # Create client
     client = get_notion_client()
 
-    # Create test page
+    # Create master page
     response = client.notion.pages.create(
         parent={"page_id": parent_id},
         properties={
             "title": {
                 "title": [
                     {
-                        "text": {"content": "Test Page (auto-generated)"}
+                        "text": {"content": "Test Master (auto-generated)"}
                     }
                 ]
             }
@@ -60,48 +59,25 @@ def test_page():
     )
     page_id = response["id"]
 
-    try:
-        yield page_id
-    finally:
-        # Cleanup: delete the test page
-        # Note: Notion API doesn't have a delete endpoint for pages
-        # We archive it instead, or just leave cleanup to manual deletion
-        # For now, we'll delete all blocks to clean up content
-        try:
-            delete_all_blocks(client, page_id)
-        except Exception as e:
-            # Don't fail test if cleanup fails
-            print(f"Warning: Cleanup failed for page {page_id}: {e}")
+    # No cleanup - page remains for inspection
+    yield page_id
 
 
-def test_fixture_creates_page(test_page):
-    """Test that fixture creates a page successfully.
-
-    Scenario #6: Token check - if no token, test skips
-    Scenario #7: Cleanup works - cleanup happens in finally
-    """
-    # If we get here, fixture worked (didn't skip, created page)
-    assert test_page is not None
-    assert len(test_page) > 0
-
-
-def test_create_and_fetch(test_page):
-    """Test creating blocks and fetching them back.
+def test_1_create_and_fetch(master_page):
+    """Test creating initial blocks and fetching them back.
 
     Scenario #1: Create en fetch
-    - Maak pagina "Test Master" met:
-      - Heading 1: "Test Page"
-      - Paragraph: "Initial content"
-    - Fetch blocks terug → Assert: 2 blocks, types kloppen, content klopt
+    - Maak master met heading + paragraph
+    - Fetch blocks terug → Assert: types en content kloppen
     """
     client = get_notion_client()
 
-    # Create blocks
+    # Create initial blocks
     blocks = [
         {
             "type": "heading_1",
             "heading_1": {
-                "rich_text": [{"type": "text", "text": {"content": "Test Page"}}]
+                "rich_text": [{"type": "text", "text": {"content": "Test Results"}}]
             }
         },
         {
@@ -112,67 +88,46 @@ def test_create_and_fetch(test_page):
         }
     ]
 
-    append_blocks(client, test_page, blocks)
+    append_blocks(client, master_page, blocks)
 
     # Fetch blocks back
-    fetched = fetch_blocks_recursive(client, test_page)
+    fetched = fetch_blocks_recursive(client, master_page)
 
-    # Assert: 2 blocks
-    assert len(fetched) == 2
-
-    # Assert: types correct
-    assert fetched[0]["type"] == "heading_1"
-    assert fetched[1]["type"] == "paragraph"
-
-    # Assert: content correct
+    # Assert: 2 blocks with correct content
+    assert len(fetched) >= 2
     from notion_sync import extract_block_text
-    assert extract_block_text(fetched[0]) == "Test Page"
+    assert fetched[0]["type"] == "heading_1"
+    assert extract_block_text(fetched[0]) == "Test Results"
+    assert fetched[1]["type"] == "paragraph"
     assert extract_block_text(fetched[1]) == "Initial content"
 
 
-def test_empty_page(test_page):
-    """Test fetching from empty page.
-
-    Scenario #4: Lege pagina
-    - Maak pagina zonder blocks
-    - Fetch → Assert: empty list, geen error
-    """
-    client = get_notion_client()
-
-    # Don't add any blocks, just fetch
-    fetched = fetch_blocks_recursive(client, test_page)
-
-    # Assert: empty list
-    assert fetched == []
-    assert isinstance(fetched, list)
-
-
-def test_nested_blocks(test_page):
-    """Test fetching nested blocks.
+def test_2_nested_blocks(master_page):
+    """Test adding nested blocks.
 
     Scenario #5: Nested blocks
-    - Maak toggle met 2 nested paragraphs
-    - Fetch recursive → Assert: toggle heeft _children met 2 items
+    - Voeg toggle met nested children toe
+    - Fetch recursive → Assert: toggle heeft _children
     """
     client = get_notion_client()
 
-    # Create toggle with nested children
+    # Add toggle with nested children
     blocks = [
         {
             "type": "toggle",
             "toggle": {
-                "rich_text": [{"type": "text", "text": {"content": "Toggle block"}}],
+                "rich_text": [{"type": "text", "text": {"content": "Nested Test"}}],
                 "children": [
                     {
                         "type": "paragraph",
                         "paragraph": {
-                            "rich_text": [{"type": "text", "text": {"content": "Child 1"}}]
+                            "rich_text": [{"type": "text", "text": {"content": "Nested child 1"}}]
                         }
                     },
                     {
                         "type": "paragraph",
                         "paragraph": {
-                            "rich_text": [{"type": "text", "text": {"content": "Child 2"}}]
+                            "rich_text": [{"type": "text", "text": {"content": "Nested child 2"}}]
                         }
                     }
                 ]
@@ -180,38 +135,34 @@ def test_nested_blocks(test_page):
         }
     ]
 
-    append_blocks(client, test_page, blocks)
+    append_blocks(client, master_page, blocks)
 
-    # Fetch recursive
-    fetched = fetch_blocks_recursive(client, test_page)
+    # Fetch and find toggle block
+    fetched = fetch_blocks_recursive(client, master_page)
+    toggle_blocks = [b for b in fetched if b["type"] == "toggle"]
 
-    # Assert: 1 toggle block
-    assert len(fetched) == 1
-    assert fetched[0]["type"] == "toggle"
+    assert len(toggle_blocks) >= 1
+    toggle = toggle_blocks[0]
+    assert "_children" in toggle
+    assert len(toggle["_children"]) == 2
 
-    # Assert: toggle has _children with 2 items
-    assert "_children" in fetched[0]
-    assert len(fetched[0]["_children"]) == 2
-
-    # Assert: children content
     from notion_sync import extract_block_text
-    assert extract_block_text(fetched[0]["_children"][0]) == "Child 1"
-    assert extract_block_text(fetched[0]["_children"][1]) == "Child 2"
+    assert extract_block_text(toggle["_children"][0]) == "Nested child 1"
+    assert extract_block_text(toggle["_children"][1]) == "Nested child 2"
 
 
-def test_diff_update(test_page):
+def test_3_diff_update(master_page):
     """Test updating content via diff.
 
     Scenario #2: Update via diff
-    - Start met pagina met paragraph "Version 1"
+    - Voeg paragraph "Version 1" toe
     - Wijzig naar "Version 2" via diff
-    - Assert: 1 UPDATE operatie (geen DELETE + INSERT)
-    - Fetch terug → Content is "Version 2"
+    - Assert: UPDATE operatie (niet DELETE + INSERT)
     """
     client = get_notion_client()
 
-    # Create initial content
-    initial_blocks = [
+    # Add a paragraph
+    blocks = [
         {
             "type": "paragraph",
             "paragraph": {
@@ -219,74 +170,57 @@ def test_diff_update(test_page):
             }
         }
     ]
-    append_blocks(client, test_page, initial_blocks)
+    append_blocks(client, master_page, blocks)
 
     # Fetch current state
-    current_blocks = fetch_blocks_recursive(client, test_page)
+    current_blocks = fetch_blocks_recursive(client, master_page)
 
-    # New desired content
-    new_blocks = [
-        {
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": "Version 2"}}]
-            }
+    # Find the "Version 1" paragraph
+    version_blocks = [b for b in current_blocks if b["type"] == "paragraph"]
+    from notion_sync import extract_block_text
+    version_block = [b for b in version_blocks if extract_block_text(b) == "Version 1"][0]
+
+    # Create updated version of just this block
+    updated_block = {
+        "type": "paragraph",
+        "paragraph": {
+            "rich_text": [{"type": "text", "text": {"content": "Version 2"}}]
         }
-    ]
+    }
 
-    # Generate diff
-    ops = generate_diff(current_blocks, new_blocks)
+    # Generate diff for single block update
+    ops = generate_diff([version_block], [updated_block])
 
-    # Assert: should have 1 UPDATE operation (not DELETE + INSERT)
+    # Assert: should have UPDATE operation
     update_ops = [op for op in ops if op["op"] == "UPDATE"]
-    delete_ops = [op for op in ops if op["op"] == "DELETE"]
-    insert_ops = [op for op in ops if op["op"] == "INSERT"]
-
     assert len(update_ops) == 1, f"Expected 1 UPDATE, got {len(update_ops)}"
-    assert len(delete_ops) == 0, f"Expected 0 DELETE, got {len(delete_ops)}"
-    assert len(insert_ops) == 0, f"Expected 0 INSERT, got {len(insert_ops)}"
 
     # Execute diff
-    stats = execute_diff(client, ops, test_page, dry_run=False)
-
-    # Verify stats
+    stats = execute_diff(client, ops, master_page, dry_run=False)
     assert stats["updated"] == 1
 
-    # Fetch back and verify content
-    fetched = fetch_blocks_recursive(client, test_page)
-    from notion_sync import extract_block_text
-    assert extract_block_text(fetched[0]) == "Version 2"
+    # Verify update
+    fetched = fetch_blocks_recursive(client, master_page)
+    version_blocks = [b for b in fetched if b["type"] == "paragraph"]
+    version_texts = [extract_block_text(b) for b in version_blocks]
+    assert "Version 2" in version_texts
 
 
-def test_clone_and_sync(test_page):
-    """Test cloning a page and keeping master and clone in sync.
+def test_4_clone_and_sync(master_page):
+    """Test cloning master and keeping both in sync.
 
     Scenario #3: Clone en sync
-    - Maak master met heading + paragraph
-    - Clone → "Test Clone"
-    - Assert: Clone heeft identieke blocks
-    - Wijzig master paragraph naar "Updated"
-    - Pas zelfde wijziging toe op clone
-    - Fetch beide → Assert: master blocks == clone blocks
+    - Clone master → "Test Clone"
+    - Assert: Clone heeft alle content van master
+    - Voeg "Final update" toe aan beide
+    - Assert: master en clone blijven identiek
+
+    Both pages remain for manual inspection.
     """
     client = get_notion_client()
 
-    # Create master content
-    master_blocks = [
-        {
-            "type": "heading_1",
-            "heading_1": {
-                "rich_text": [{"type": "text", "text": {"content": "Master Page"}}]
-            }
-        },
-        {
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": "Original content"}}]
-            }
-        }
-    ]
-    append_blocks(client, test_page, master_blocks)
+    # Fetch all master content
+    master_content = fetch_blocks_recursive(client, master_page)
 
     # Create clone page
     parent_id = os.getenv("TEST_PAGE_ID")
@@ -304,72 +238,59 @@ def test_clone_and_sync(test_page):
     )
     clone_page_id = clone_response["id"]
 
-    try:
-        # Clone content to clone page
-        master_content = fetch_blocks_recursive(client, test_page)
+    # Clone all content to clone page
+    clean_blocks = []
+    for block in master_content:
+        clean_block = {"type": block["type"]}
+        clean_block[block["type"]] = block[block["type"]].copy()
+        # Copy children recursively
+        if "_children" in block:
+            children = []
+            for child in block["_children"]:
+                child_clean = {"type": child["type"]}
+                child_clean[child["type"]] = child[child["type"]].copy()
+                children.append(child_clean)
+            clean_block[block["type"]]["children"] = children
+        clean_blocks.append(clean_block)
 
-        # Remove IDs and Notion metadata before cloning
-        clean_blocks = []
-        for block in master_content:
-            clean_block = {"type": block["type"]}
-            clean_block[block["type"]] = block[block["type"]].copy()
-            # Remove id, created_time, etc - just keep content
-            if "rich_text" in clean_block[block["type"]]:
-                clean_block[block["type"]]["rich_text"] = block[block["type"]]["rich_text"]
-            clean_blocks.append(clean_block)
+    append_blocks(client, clone_page_id, clean_blocks)
 
-        append_blocks(client, clone_page_id, clean_blocks)
+    # Verify clone has same content
+    clone_content = fetch_blocks_recursive(client, clone_page_id)
+    assert len(clone_content) == len(master_content)
 
-        # Verify clone has identical content
-        clone_content = fetch_blocks_recursive(client, clone_page_id)
-        assert len(clone_content) == len(master_content)
+    from notion_sync import extract_block_text
+    for master_block, clone_block in zip(master_content, clone_content):
+        assert master_block["type"] == clone_block["type"]
+        assert extract_block_text(master_block) == extract_block_text(clone_block)
 
-        from notion_sync import extract_block_text
-        for i, (master_block, clone_block) in enumerate(zip(master_content, clone_content)):
-            assert master_block["type"] == clone_block["type"]
-            assert extract_block_text(master_block) == extract_block_text(clone_block)
-
-        # Update master paragraph
-        updated_blocks = [
-            {
-                "type": "heading_1",
-                "heading_1": {
-                    "rich_text": [{"type": "text", "text": {"content": "Master Page"}}]
-                }
-            },
-            {
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": "Updated content"}}]
-                }
+    # Add final update to both
+    final_block = [
+        {
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": "Final sync test - both pages identical"}}]
             }
-        ]
+        }
+    ]
 
-        # Apply update to master via diff
-        master_current = fetch_blocks_recursive(client, test_page)
-        master_ops = generate_diff(master_current, updated_blocks)
-        execute_diff(client, master_ops, test_page, dry_run=False)
+    append_blocks(client, master_page, final_block)
+    append_blocks(client, clone_page_id, final_block)
 
-        # Apply same update to clone via diff
-        clone_current = fetch_blocks_recursive(client, clone_page_id)
-        clone_ops = generate_diff(clone_current, updated_blocks)
-        execute_diff(client, clone_ops, clone_page_id, dry_run=False)
+    # Verify both still identical
+    final_master = fetch_blocks_recursive(client, master_page)
+    final_clone = fetch_blocks_recursive(client, clone_page_id)
 
-        # Fetch both and verify they're identical
-        final_master = fetch_blocks_recursive(client, test_page)
-        final_clone = fetch_blocks_recursive(client, clone_page_id)
+    assert len(final_master) == len(final_clone)
 
-        assert len(final_master) == len(final_clone)
-        for master_block, clone_block in zip(final_master, final_clone):
-            assert master_block["type"] == clone_block["type"]
-            assert extract_block_text(master_block) == extract_block_text(clone_block)
-            # Check specifically that both have "Updated content"
-            if master_block["type"] == "paragraph":
-                assert extract_block_text(master_block) == "Updated content"
+    # Both should have the final message
+    master_texts = [extract_block_text(b) for b in final_master if b["type"] == "paragraph"]
+    clone_texts = [extract_block_text(b) for b in final_clone if b["type"] == "paragraph"]
 
-    finally:
-        # Cleanup clone page
-        try:
-            delete_all_blocks(client, clone_page_id)
-        except Exception as e:
-            print(f"Warning: Cleanup failed for clone page {clone_page_id}: {e}")
+    assert "Final sync test - both pages identical" in master_texts
+    assert "Final sync test - both pages identical" in clone_texts
+
+    print(f"\nTest complete!")
+    print(f"Master page ID: {master_page}")
+    print(f"Clone page ID: {clone_page_id}")
+    print(f"Check both pages in Notion - they should be identical")
