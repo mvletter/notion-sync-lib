@@ -9,13 +9,30 @@ from notion_sync import get_notion_client
 load_dotenv()
 
 
-@pytest.fixture(scope="session")
-def master_page():
-    """Create master test page for all tests.
+def pytest_collection_modifyitems(items):
+    """Ensure test_99_verify_sync runs last."""
+    verify_test = None
+    other_tests = []
 
-    Uses scope="session" so all test files share the same page.
+    for item in items:
+        if item.name == "test_99_verify_sync":
+            verify_test = item
+        else:
+            other_tests.append(item)
+
+    if verify_test:
+        items[:] = other_tests + [verify_test]
+
+
+@pytest.fixture(scope="session")
+def test_pages():
+    """Create master and clone test pages for all tests.
+
+    Uses scope="session" so all test files share the same pages.
     Content accumulates across tests - no cleanup between tests.
-    Page remains after tests for manual inspection.
+    Both pages remain after tests for manual inspection.
+
+    Yields tuple: (master_page_id, clone_page_id)
     """
     # Check if we have API token
     token = os.getenv("NOTION_API_TOKEN")
@@ -31,7 +48,7 @@ def master_page():
     client = get_notion_client()
 
     # Create master page
-    response = client.notion.pages.create(
+    master_response = client.notion.pages.create(
         parent={"page_id": parent_id},
         properties={
             "title": {
@@ -43,10 +60,76 @@ def master_page():
             }
         }
     )
-    page_id = response["id"]
+    master_page_id = master_response["id"]
 
-    # No cleanup - page remains for inspection
-    yield page_id
+    # Create clone page
+    clone_response = client.notion.pages.create(
+        parent={"page_id": parent_id},
+        properties={
+            "title": {
+                "title": [
+                    {
+                        "text": {"content": "Test Clone (auto-generated)"}
+                    }
+                ]
+            }
+        }
+    )
+    clone_page_id = clone_response["id"]
+
+    # No cleanup - both pages remain for inspection
+    yield (master_page_id, clone_page_id)
+
+
+@pytest.fixture(scope="session")
+def master_page(test_pages):
+    """Get master page ID from test_pages fixture."""
+    return test_pages[0]
+
+
+@pytest.fixture(scope="session")
+def clone_page(test_pages):
+    """Get clone page ID from test_pages fixture."""
+    return test_pages[1]
+
+
+@pytest.fixture(autouse=True)
+def sync_to_clone(request, test_pages):
+    """After each test, sync master changes to clone.
+
+    Uses autouse=True so it runs automatically after every test.
+    Syncs via diff to test that all operations work correctly.
+    """
+    # Run the test first
+    yield
+
+    # After test: sync master to clone
+    master_page_id, clone_page_id = test_pages
+
+    # Skip sync for the final verification test (test_99)
+    # to avoid double-syncing
+    if request.node.name == "test_99_verify_sync":
+        return
+
+    from notion_sync import (
+        fetch_blocks_recursive,
+        generate_recursive_diff,
+        execute_recursive_diff,
+    )
+
+    client = get_notion_client()
+
+    # Fetch current state of both pages
+    master_blocks = fetch_blocks_recursive(client, master_page_id)
+    clone_blocks = fetch_blocks_recursive(client, clone_page_id)
+
+    # Generate recursive diff to sync master → clone
+    # Use recursive version to handle nested structures like column_lists
+    ops = generate_recursive_diff(clone_blocks, master_blocks)
+
+    # Execute sync
+    if ops:
+        execute_recursive_diff(client, ops, clone_page_id, dry_run=False)
 
 
 # Helper functions for creating blocks
@@ -111,3 +194,19 @@ def find_block_by_text(blocks: list, text: str, block_type: str = None) -> dict:
 def find_blocks_by_type(blocks: list, block_type: str) -> list:
     """Find all blocks of a given type."""
     return [b for b in blocks if b["type"] == block_type]
+
+
+def make_column_list(columns: list) -> dict:
+    """Create a column_list structure for testing.
+
+    Args:
+        columns: List of dicts with 'children' and optional 'width_ratio'
+
+    Example:
+        make_column_list([
+            {"children": [make_paragraph("Left")], "width_ratio": 0.5},
+            {"children": [make_paragraph("Right")], "width_ratio": 0.5}
+        ])
+    """
+    from notion_sync.columns import _build_column_list_block
+    return _build_column_list_block(columns)
