@@ -218,7 +218,8 @@ Delete `tests/test_live_*.py` and `tests/conftest.py`
 - [x] T1-T4: Basic test setup (fixture, create/fetch, diff UPDATE, clone)
 - [x] Extended diff operations: DELETE, INSERT, REPLACE
 - [x] Restructured: Split into modules with shared helpers
-- [x] 7 tests total in 3 files
+- [x] Column tests: create_column_list, unwrap_column_list
+- [x] 9 tests total in 4 files
 
 **Test coverage**:
 - ✅ Create & fetch blocks
@@ -227,13 +228,45 @@ Delete `tests/test_live_*.py` and `tests/conftest.py`
 - ✅ Diff DELETE (remove block)
 - ✅ Diff INSERT (add new block)
 - ✅ Diff REPLACE (change block type)
-- ✅ Clone and sync (master/clone remain identical)
+- ✅ Columns: create 2-column layout with width_ratio
+- ✅ Columns: unwrap to flat blocks
+
+**Current issue - Auto-sync niet werkend**:
+
+**Probleem**: Auto-sync fixture (na elke test) sync'd niet naar clone
+- Master krijgt content
+- Clone blijft leeg
+- Geen errors zichtbaar
+
+**Implementatie**:
+```python
+@pytest.fixture(autouse=True)
+def sync_to_clone(request, test_pages):
+    yield  # Test runs
+
+    # After test: sync master → clone
+    master_blocks = fetch_blocks_recursive(client, master_page_id)
+    clone_blocks = fetch_blocks_recursive(client, clone_page_id)
+    ops = generate_recursive_diff(clone_blocks, master_blocks)
+
+    if ops:
+        execute_recursive_diff(client, ops, clone_page_id, dry_run=False)
+```
+
+**Mogelijke oorzaken**:
+1. `generate_recursive_diff()` geeft lege lijst (geen diff gevonden)
+2. `execute_recursive_diff()` faalt stil zonder error
+3. Geen logging/error handling - we zien niet wat er misgaat
+
+**Needed**: Debug logging in sync fixture om te zien:
+- Hoeveel blocks in master vs clone
+- Hoeveel operations gegenereerd
+- Of execute faalt
 
 **Not yet tested**:
-- ❌ Columns (create_column_list, unwrap, diff with columns)
 - ❌ Deep nesting (3+ levels)
 - ❌ Bulk operations (>10 blocks)
 - ❌ Special block types (code, quote, divider, lists)
 - ❌ Empty content edge cases
 
-**Next**: Column operations tests
+**Next**: Fix auto-sync debugging
