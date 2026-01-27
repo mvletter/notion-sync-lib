@@ -375,6 +375,10 @@ def execute_recursive_diff(
             stats["updated"] += 1
             continue
 
+        # Get block type early for checks
+        local_type = local_block["type"]
+        notion_type = op["notion_block"].get("type")
+
         # Check for archived blocks
         if op["notion_block"].get("archived", False):
             logger.debug(f"Skipping archived block at {path}")
@@ -395,8 +399,6 @@ def execute_recursive_diff(
 
         # Execute update
         try:
-            local_type = local_block["type"]
-            notion_type = op["notion_block"].get("type")
 
             # Check for block type mismatch (master vs slave structure difference)
             if local_type != notion_type:
