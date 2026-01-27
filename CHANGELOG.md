@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-01-27
+
+### Fixed
+
+- **File-based blocks** (image, video, pdf, file, audio): Fixed `body.image.type should be not present` error. Only caption can be updated after creation, not type/file/external properties.
+- **Synced block copies**: Added detection and skip logic for read-only synced block copies (`synced_from != None`). These blocks cannot be updated via API.
+- **Synced block originals**: Fixed `body.synced_block.synced_from should be defined` error. Field must be present with `null` value, not removed entirely.
+- **Server error retry**: Extended retry logic to handle 502/503/504 Bad Gateway errors with exponential backoff (1s, 2s, 4s, 8s, 16s). Previously only 429 rate limit errors were retried.
+- **HTTPResponseError import**: Fixed import error by importing `HTTPResponseError` from `notion_client.errors` module (not exported in top-level `notion_client`).
+- **Table blocks**: Fixed `body.table.table_width should be not present` error. Table structural properties (table_width, has_column_header, has_row_header) are immutable after creation.
+- **Numbered list items**: Fixed `body.numbered_list_item.list_start_index should be not present` error. The list_start_index property is immutable after creation.
+- **Audio blocks**: Added audio to file-based blocks category. Same handling as image/video/pdf/file (only caption can be updated).
+- **Variable scope**: Fixed `UnboundLocalError: cannot access local variable 'local_type'` by moving variable definition before usage.
+- **NoneType safety**: Added None checks before calling `_is_synced_copy()` to prevent `'NoneType' object has no attribute 'get'` errors.
+
+### Changed
+
+- Added `_FILE_BASED_BLOCKS` constant for blocks where only caption can be updated
+- Added `_STRUCTURE_ONLY_BLOCKS` constant for blocks with immutable structural properties
+- Added `_is_synced_copy()` helper function to detect read-only synced block copies
+
 ## [1.0.0] - 2025-01-18
 
 ### 🎉 Production Release
@@ -85,6 +106,7 @@ This release marks the library as production-ready with comprehensive documentat
 
 - Import paths corrected for standalone pip installation
 
+[1.0.1]: https://github.com/mvletter/notion-sync-lib/releases/tag/v1.0.1
 [1.0.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v1.0.0
 [0.3.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v0.2.0
