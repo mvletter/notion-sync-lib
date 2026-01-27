@@ -592,9 +592,10 @@ def execute_diff(
                         # For file-based blocks, only update caption (not type/file/external)
                         update_data = {block_type: {"caption": block_content.get("caption", [])}}
                     elif block_type == "synced_block":
-                        # For original synced blocks (not copies), we can update children
-                        # but the synced_from field must not be included in update
-                        block_content.pop("synced_from", None)
+                        # For original synced blocks (not copies), synced_from must be null
+                        # Notion API requires the field to be present, but cannot be updated
+                        if "synced_from" in block_content:
+                            block_content["synced_from"] = None
                         block_content.pop("children", None)
                         update_data = {block_type: block_content}
                     else:
@@ -660,6 +661,9 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
     Converts blocks from fetch_blocks_recursive format (with _children at root)
     to Notion API format (with children inside block type property).
 
+    Strips metadata fields (id, created_time, etc.) that Notion API doesn't accept
+    in children arrays.
+
     # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
 
     Args:
@@ -669,6 +673,15 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
         A deep copy of the block in Notion API format.
     """
     cleaned = copy.deepcopy(block)
+
+    # Strip metadata fields that API doesn't accept in children
+    # Keep only: type, <type>, and children (after conversion)
+    metadata_fields = [
+        "id", "created_time", "created_by", "last_edited_time", "last_edited_by",
+        "archived", "in_trash", "has_children", "parent", "object"
+    ]
+    for field in metadata_fields:
+        cleaned.pop(field, None)
 
     # Convert _children to proper API format
     # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
