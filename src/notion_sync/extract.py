@@ -77,8 +77,8 @@ def extract_block_text(block: dict) -> str:
 
         # For callout, include icon if present
         if block_type == "callout":
-            icon = block_data.get("icon", {})
-            if icon.get("type") == "emoji":
+            icon = block_data.get("icon")
+            if icon and icon.get("type") == "emoji":
                 emoji = icon.get("emoji", "")
                 text = f"{emoji} {text}" if text else emoji
 
