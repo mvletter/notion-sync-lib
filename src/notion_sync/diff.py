@@ -34,10 +34,11 @@ _FILE_BASED_BLOCKS = frozenset([
 # Block types with immutable structure properties
 # These blocks have structural properties that cannot be updated after creation
 # Only their children can be modified (via recursive diff)
-# Source: https://developers.notion.com/changelog/simple-table-support
 _STRUCTURE_ONLY_BLOCKS = frozenset([
-    "table"  # table_width, has_column_header, has_row_header are immutable
-             # Error: "body.table.table_width should be not present, instead was `3`"
+    "table",  # table_width, has_column_header, has_row_header are immutable
+              # Error: "body.table.table_width should be not present, instead was `3`"
+    "numbered_list_item"  # list_start_index is immutable after creation
+                          # Error: "body.numbered_list_item.list_start_index should be not present, instead was `3`"
 ])
 
 
