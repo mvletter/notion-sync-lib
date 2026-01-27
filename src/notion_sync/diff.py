@@ -387,7 +387,7 @@ def execute_recursive_diff(
             continue
 
         # Check for synced copies (read-only blocks)
-        if _is_synced_copy(op["notion_block"]):
+        if op["notion_block"] and _is_synced_copy(op["notion_block"]):
             logger.debug(f"Skipping synced copy block at {path} - read-only reference to original")
             stats["skipped"] += 1
             continue
@@ -567,7 +567,7 @@ def execute_diff(
                     )
                     last_block_id = op["notion_block_id"]
                     stats["kept"] += 1
-                elif _is_synced_copy(notion_block):
+                elif notion_block and _is_synced_copy(notion_block):
                     logger.debug(
                         "Skipping UPDATE of synced copy block at index %d - read-only reference",
                         op["index"]
