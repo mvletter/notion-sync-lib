@@ -24,6 +24,13 @@ _RICH_TEXT_ONLY_BLOCKS = frozenset([
     "callout", "toggle", "heading_1", "heading_2", "heading_3"
 ])
 
+# Block types that contain files/external resources
+# For these blocks, we can only update the caption during an UPDATE operation
+# The type/file/external fields cannot be changed via update - only via replace
+_FILE_BASED_BLOCKS = frozenset([
+    "image", "video", "pdf", "file"
+])
+
 
 def create_content_hash(block: dict[str, Any]) -> str:
     """Create a stable hash for a Notion block based on its content.
@@ -366,6 +373,9 @@ def execute_recursive_diff(
             # Use restricted update for certain block types
             if local_type in _RICH_TEXT_ONLY_BLOCKS:
                 update_data = {local_type: {"rich_text": block_content.get("rich_text", [])}}
+            elif local_type in _FILE_BASED_BLOCKS:
+                # For file-based blocks, only update caption (not type/file/external)
+                update_data = {local_type: {"caption": block_content.get("caption", [])}}
             else:
                 update_data = {local_type: block_content}
 
@@ -511,6 +521,9 @@ def execute_diff(
                     # Use restricted update for certain block types
                     if block_type in _RICH_TEXT_ONLY_BLOCKS:
                         update_data = {block_type: {"rich_text": block_content.get("rich_text", [])}}
+                    elif block_type in _FILE_BASED_BLOCKS:
+                        # For file-based blocks, only update caption (not type/file/external)
+                        update_data = {block_type: {"caption": block_content.get("caption", [])}}
                     else:
                         # Remove children - can't update children via block update API
                         block_content.pop("children", None)
