@@ -4,7 +4,8 @@ import logging
 import time
 from typing import Any
 
-from notion_client import Client, APIResponseError, HTTPResponseError
+from notion_client import Client, APIResponseError
+from notion_client.errors import HTTPResponseError
 
 from notion_sync.utils import get_notion_token
 
