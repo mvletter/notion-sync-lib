@@ -31,6 +31,15 @@ _FILE_BASED_BLOCKS = frozenset([
     "image", "video", "pdf", "file"
 ])
 
+# Block types with immutable structure properties
+# These blocks have structural properties that cannot be updated after creation
+# Only their children can be modified (via recursive diff)
+# Source: https://developers.notion.com/changelog/simple-table-support
+_STRUCTURE_ONLY_BLOCKS = frozenset([
+    "table"  # table_width, has_column_header, has_row_header are immutable
+             # Error: "body.table.table_width should be not present, instead was `3`"
+])
+
 
 def _is_synced_copy(block: dict[str, Any]) -> bool:
     """Check if a block is a synced copy (read-only reference to original).
@@ -378,6 +387,12 @@ def execute_recursive_diff(
             stats["skipped"] += 1
             continue
 
+        # Check for structure-only blocks (immutable structural properties)
+        if local_type in _STRUCTURE_ONLY_BLOCKS:
+            logger.debug(f"Skipping {local_type} block at {path} - structural properties are immutable, only children can be updated")
+            stats["skipped"] += 1
+            continue
+
         # Execute update
         try:
             local_type = local_block["type"]
@@ -550,6 +565,14 @@ def execute_diff(
                 elif _is_synced_copy(notion_block):
                     logger.debug(
                         "Skipping UPDATE of synced copy block at index %d - read-only reference",
+                        op["index"]
+                    )
+                    last_block_id = op["notion_block_id"]
+                    stats["kept"] += 1
+                elif op["local_block"]["type"] in _STRUCTURE_ONLY_BLOCKS:
+                    logger.debug(
+                        "Skipping UPDATE of %s block at index %d - structural properties are immutable",
+                        op["local_block"]["type"],
                         op["index"]
                     )
                     last_block_id = op["notion_block_id"]
