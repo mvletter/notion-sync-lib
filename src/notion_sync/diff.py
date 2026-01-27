@@ -28,7 +28,7 @@ _RICH_TEXT_ONLY_BLOCKS = frozenset([
 # For these blocks, we can only update the caption during an UPDATE operation
 # The type/file/external fields cannot be changed via update - only via replace
 _FILE_BASED_BLOCKS = frozenset([
-    "image", "video", "pdf", "file"
+    "image", "video", "pdf", "file", "audio"
 ])
 
 # Block types with immutable structure properties
