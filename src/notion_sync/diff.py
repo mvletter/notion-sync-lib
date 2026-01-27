@@ -421,10 +421,12 @@ def execute_recursive_diff(
                 # For file-based blocks, only update caption (not type/file/external)
                 update_data = {local_type: {"caption": block_content.get("caption", [])}}
             elif local_type == "synced_block":
-                # For original synced blocks (not copies), we can update children
-                # but the synced_from field must not be included in update
+                # For original synced blocks (not copies), synced_from must be null
+                # Notion API requires the field to be present, but cannot be updated
                 clean_content = block_content.copy()
-                clean_content.pop("synced_from", None)
+                # Ensure synced_from is null (not undefined/missing)
+                if "synced_from" in clean_content:
+                    clean_content["synced_from"] = None
                 update_data = {local_type: clean_content}
             else:
                 update_data = {local_type: block_content}

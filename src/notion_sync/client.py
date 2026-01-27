@@ -4,7 +4,7 @@ import logging
 import time
 from typing import Any
 
-from notion_client import Client, APIResponseError
+from notion_client import Client, APIResponseError, HTTPResponseError
 
 from notion_sync.utils import get_notion_token
 
@@ -44,11 +44,11 @@ class RateLimitedNotionClient:
         self._last_request_time = time.time()
         self.request_count += 1
 
-    def _handle_rate_limit_error(self, e: APIResponseError, attempt: int) -> bool:
+    def _handle_rate_limit_error(self, e: APIResponseError | HTTPResponseError, attempt: int) -> bool:
         """Handle API errors with exponential backoff (429, 502, 503, 504).
 
         Args:
-            e: The API response error.
+            e: The API response error (APIResponseError or HTTPResponseError).
             attempt: Current retry attempt number (0-indexed).
 
         Returns:
@@ -83,7 +83,7 @@ class RateLimitedNotionClient:
             self._wait_for_rate_limit()
             try:
                 return self.notion.pages.retrieve(page_id=page_id)
-            except APIResponseError as e:
+            except (APIResponseError, HTTPResponseError) as e:
                 if self._handle_rate_limit_error(e, attempt):
                     continue
                 raise
@@ -112,7 +112,7 @@ class RateLimitedNotionClient:
                     block_id=block_id
                 )
                 return list(blocks)
-            except APIResponseError as e:
+            except (APIResponseError, HTTPResponseError) as e:
                 if self._handle_rate_limit_error(e, attempt):
                     continue
                 raise
@@ -145,7 +145,7 @@ class RateLimitedNotionClient:
                 if after:
                     kwargs["after"] = after
                 return self.notion.blocks.children.append(**kwargs)
-            except APIResponseError as e:
+            except (APIResponseError, HTTPResponseError) as e:
                 if self._handle_rate_limit_error(e, attempt):
                     continue
                 raise
@@ -168,7 +168,7 @@ class RateLimitedNotionClient:
             self._wait_for_rate_limit()
             try:
                 return self.notion.blocks.delete(block_id=block_id)
-            except APIResponseError as e:
+            except (APIResponseError, HTTPResponseError) as e:
                 if self._handle_rate_limit_error(e, attempt):
                     continue
                 raise
@@ -192,7 +192,7 @@ class RateLimitedNotionClient:
             self._wait_for_rate_limit()
             try:
                 return self.notion.blocks.update(block_id=block_id, **data)
-            except APIResponseError as e:
+            except (APIResponseError, HTTPResponseError) as e:
                 if self._handle_rate_limit_error(e, attempt):
                     continue
                 raise
@@ -228,7 +228,7 @@ class RateLimitedNotionClient:
                         }
                     }
                 )
-            except APIResponseError as e:
+            except (APIResponseError, HTTPResponseError) as e:
                 if self._handle_rate_limit_error(e, attempt):
                     continue
                 raise
