@@ -45,7 +45,7 @@ class RateLimitedNotionClient:
         self.request_count += 1
 
     def _handle_rate_limit_error(self, e: APIResponseError, attempt: int) -> bool:
-        """Handle 429 rate limit error with exponential backoff.
+        """Handle API errors with exponential backoff (429, 502, 503, 504).
 
         Args:
             e: The API response error.
@@ -54,13 +54,15 @@ class RateLimitedNotionClient:
         Returns:
             True if should retry, False if should give up.
         """
-        if e.status != 429:
+        # Retryable errors: 429 (rate limit), 502/503/504 (server errors)
+        retryable_statuses = {429, 502, 503, 504}
+        if e.status not in retryable_statuses:
             return False
         if attempt >= MAX_RETRIES - 1:
-            logger.error("Max retry attempts reached after rate limit errors")
+            logger.error(f"Max retry attempts reached after {e.status} errors")
             return False
         wait_time = 2 ** attempt
-        logger.warning(f"Rate limited (429), waiting {wait_time}s before retry...")
+        logger.warning(f"API error {e.status}, waiting {wait_time}s before retry (attempt {attempt + 1}/{MAX_RETRIES})...")
         time.sleep(wait_time)
         return True
 

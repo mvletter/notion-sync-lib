@@ -32,6 +32,26 @@ _FILE_BASED_BLOCKS = frozenset([
 ])
 
 
+def _is_synced_copy(block: dict[str, Any]) -> bool:
+    """Check if a block is a synced copy (read-only reference to original).
+
+    Synced blocks work as follows:
+    - Original synced block: type="synced_block", synced_block.synced_from=None (can update)
+    - Synced copy: type="synced_block", synced_block.synced_from={block_id} (read-only)
+
+    Args:
+        block: A Notion block dictionary.
+
+    Returns:
+        True if block is a synced copy (cannot be updated), False otherwise.
+    """
+    if block.get("type") != "synced_block":
+        return False
+
+    synced_from = block.get("synced_block", {}).get("synced_from")
+    return synced_from is not None
+
+
 def create_content_hash(block: dict[str, Any]) -> str:
     """Create a stable hash for a Notion block based on its content.
 
@@ -352,6 +372,12 @@ def execute_recursive_diff(
             stats["skipped"] += 1
             continue
 
+        # Check for synced copies (read-only blocks)
+        if _is_synced_copy(op["notion_block"]):
+            logger.debug(f"Skipping synced copy block at {path} - read-only reference to original")
+            stats["skipped"] += 1
+            continue
+
         # Execute update
         try:
             local_type = local_block["type"]
@@ -376,6 +402,12 @@ def execute_recursive_diff(
             elif local_type in _FILE_BASED_BLOCKS:
                 # For file-based blocks, only update caption (not type/file/external)
                 update_data = {local_type: {"caption": block_content.get("caption", [])}}
+            elif local_type == "synced_block":
+                # For original synced blocks (not copies), we can update children
+                # but the synced_from field must not be included in update
+                clean_content = block_content.copy()
+                clean_content.pop("synced_from", None)
+                update_data = {local_type: clean_content}
             else:
                 update_data = {local_type: block_content}
 
@@ -515,6 +547,13 @@ def execute_diff(
                     )
                     last_block_id = op["notion_block_id"]
                     stats["kept"] += 1
+                elif _is_synced_copy(notion_block):
+                    logger.debug(
+                        "Skipping UPDATE of synced copy block at index %d - read-only reference",
+                        op["index"]
+                    )
+                    last_block_id = op["notion_block_id"]
+                    stats["kept"] += 1
                 else:
                     block_type = op["local_block"]["type"]
                     block_content = op["local_block"][block_type].copy()
@@ -524,6 +563,12 @@ def execute_diff(
                     elif block_type in _FILE_BASED_BLOCKS:
                         # For file-based blocks, only update caption (not type/file/external)
                         update_data = {block_type: {"caption": block_content.get("caption", [])}}
+                    elif block_type == "synced_block":
+                        # For original synced blocks (not copies), we can update children
+                        # but the synced_from field must not be included in update
+                        block_content.pop("synced_from", None)
+                        block_content.pop("children", None)
+                        update_data = {block_type: block_content}
                     else:
                         # Remove children - can't update children via block update API
                         block_content.pop("children", None)
