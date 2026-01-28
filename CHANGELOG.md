@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-01-28
+
+### Fixed
+
+- **Table block updates**: Fixed `body.table.table_width should be not present` error when updating table blocks. The `table_width` property is creation-only and cannot be updated via the Notion API. Now strips `table_width` (and `children`) from table block content before sending UPDATE requests.
+
+## [1.0.3] - 2026-01-28
+
+### Fixed
+
+- **Block type property children**: Fixed `body.children[0].<type> should be defined` error when REPLACE operations encounter blocks with children in their type-specific property (e.g., `column.children`). Now strips `children` from the `<type>` dictionary in `_prepare_block_for_api` before processing `_children` separately.
+
 ## [1.0.2] - 2026-01-28
 
 ### Fixed
