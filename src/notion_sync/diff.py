@@ -664,6 +664,37 @@ def execute_diff(
     return stats
 
 
+def _is_valid_notion_block(block: dict[str, Any]) -> bool:
+    """Check if a block has a valid structure for Notion API.
+
+    A valid block must have:
+    - type: string field
+    - <type>: dict property (e.g., paragraph.rich_text, column.children)
+
+    Args:
+        block: Block dictionary to validate.
+
+    Returns:
+        True if block is valid for Notion API, False otherwise.
+    """
+    if not isinstance(block, dict):
+        return False
+
+    block_type = block.get("type")
+    if not block_type or not isinstance(block_type, str):
+        return False
+
+    # Check if the type property exists and is a dict (required by Notion API)
+    type_data = block.get(block_type)
+    if not isinstance(type_data, dict):
+        logger.warning(
+            f"Invalid block: {block_type} property must be a dict, got {type(type_data).__name__}"
+        )
+        return False
+
+    return True
+
+
 def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
     """Deep copy a block and convert from internal format to Notion API format.
 
@@ -708,8 +739,20 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
             # For toggles: _children → toggle.children
             # For column_list: _children → column_list.children (each child is a column)
             # For columns: _children → column.children
-            prepared_children = [_prepare_block_for_api(child) for child in children]
-            cleaned[block_type]["children"] = prepared_children
+            prepared_children = []
+            for child in children:
+                # Validate child block before preparing
+                if not _is_valid_notion_block(child):
+                    logger.warning(
+                        f"Skipping invalid child block in {block_type}: missing or invalid type property"
+                    )
+                    continue
+                prepared_child = _prepare_block_for_api(child)
+                prepared_children.append(prepared_child)
+
+            # Only add children if we have valid ones
+            if prepared_children:
+                cleaned[block_type]["children"] = prepared_children
 
     return cleaned
 
