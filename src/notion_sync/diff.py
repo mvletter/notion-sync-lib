@@ -627,24 +627,25 @@ def execute_diff(
                     stats["deleted"] += 1
 
             elif op["op"] == "INSERT":
-                prepared = _prepare_block_for_api(op["local_block"])
-                if prepared is None:
-                    logger.warning(f"Skipping INSERT at index {op['index']}: invalid block")
+                # Skip child_database and child_page blocks - cannot be added via blocks API
+                if op["local_block"].get("type") in ("child_database", "child_page"):
+                    logger.info(f"Skipping INSERT of {op['local_block']['type']} block at index {op['index']}")
+                    stats["skipped"] = stats.get("skipped", 0) + 1
                     continue
-                blocks_to_insert = [prepared]
+
+                blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
                 # Use rate-limited append_blocks method (not direct API call)
                 result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                 last_block_id = result["results"][0]["id"]
                 stats["inserted"] += 1
 
             elif op["op"] == "REPLACE":
-                prepared = _prepare_block_for_api(op["local_block"])
-                if prepared is None:
-                    logger.warning(f"Skipping REPLACE at index {op['index']}: invalid block")
+                # Skip child_database and child_page blocks - cannot be added via blocks API
+                if op["local_block"].get("type") in ("child_database", "child_page"):
+                    logger.info(f"Skipping REPLACE of {op['local_block']['type']} block at index {op['index']}")
                     last_block_id = op["notion_block_id"]
-                    stats["kept"] += 1
+                    stats["skipped"] = stats.get("skipped", 0) + 1
                     continue
-                blocks_to_insert = [prepared]
 
                 if is_archived:
                     logger.debug(
@@ -652,6 +653,7 @@ def execute_diff(
                         op["index"]
                     )
                     last_block_id = op["notion_block_id"]
+                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
                     # Use rate-limited append_blocks method (not direct API call)
                     result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
@@ -659,6 +661,7 @@ def execute_diff(
                 else:
                     # Use recursive delete to handle blocks with children (e.g., toggles)
                     _delete_block_recursive(client, op["notion_block_id"])
+                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
                     # Use rate-limited append_blocks method (not direct API call)
                     result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
@@ -674,48 +677,7 @@ def execute_diff(
     return stats
 
 
-def _is_valid_notion_block(block: dict[str, Any]) -> bool:
-    """Check if a block has a valid structure for Notion API.
-
-    A valid block must have:
-    - type: string field
-    - <type>: dict property (e.g., paragraph.rich_text, column.children)
-    - NOT be a child_database or child_page (unsupported via blocks API)
-
-    Args:
-        block: Block dictionary to validate.
-
-    Returns:
-        True if block is valid for Notion API, False otherwise.
-    """
-    if not isinstance(block, dict):
-        return False
-
-    block_type = block.get("type")
-    if not block_type or not isinstance(block_type, str):
-        return False
-
-    # Filter out child_database and child_page blocks
-    # These CANNOT be added via blocks.children.append API
-    # They must be created via dedicated database/page creation endpoints
-    if block_type in ("child_database", "child_page"):
-        logger.warning(
-            f"Skipping {block_type} block: cannot be added via blocks API (use dedicated creation endpoint)"
-        )
-        return False
-
-    # Check if the type property exists and is a dict (required by Notion API)
-    type_data = block.get(block_type)
-    if not isinstance(type_data, dict):
-        logger.warning(
-            f"Invalid block: {block_type} property must be a dict, got {type(type_data).__name__}"
-        )
-        return False
-
-    return True
-
-
-def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any] | None:
+def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
     """Deep copy a block and convert from internal format to Notion API format.
 
     Converts blocks from fetch_blocks_recursive format (with _children at root)
@@ -730,13 +692,8 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any] | None:
         block: A block dictionary that may contain _children.
 
     Returns:
-        A deep copy of the block in Notion API format, or None if block is invalid.
+        A deep copy of the block in Notion API format.
     """
-    # CRITICAL: Validate block BEFORE processing
-    if not _is_valid_notion_block(block):
-        logger.warning(f"Skipping invalid block in _prepare_block_for_api: {block.get('type', 'NO_TYPE')}")
-        return None
-
     cleaned = copy.deepcopy(block)
 
     # Strip metadata fields that API doesn't accept in children
@@ -766,17 +723,14 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any] | None:
             # For columns: _children → column.children
             prepared_children = []
             for child in children:
-                # Validate child block before preparing
-                if not _is_valid_notion_block(child):
-                    logger.warning(
-                        f"Skipping invalid child block in {block_type}: missing or invalid type property"
-                    )
+                child_type = child.get("type")
+                # Skip child_database and child_page - cannot be added via blocks API
+                if child_type in ("child_database", "child_page"):
+                    logger.debug(f"Skipping {child_type} block: cannot be added via blocks.children.append")
                     continue
-                prepared_child = _prepare_block_for_api(child)
-                if prepared_child is not None:
-                    prepared_children.append(prepared_child)
+                prepared_children.append(_prepare_block_for_api(child))
 
-            # Only add children if we have valid ones
+            # Only add children if we have any after filtering
             if prepared_children:
                 cleaned[block_type]["children"] = prepared_children
 
