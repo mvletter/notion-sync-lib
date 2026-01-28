@@ -147,6 +147,13 @@ class RateLimitedNotionClient:
                     kwargs["after"] = after
                 return self.notion.blocks.children.append(**kwargs)
             except (APIResponseError, HTTPResponseError) as e:
+                # Log the problematic blocks payload on validation errors
+                if "body failed validation" in str(e) or "should be defined" in str(e):
+                    import json
+                    logger.error(f"Notion API validation error. Problematic payload:")
+                    logger.error(f"Page ID: {page_id}")
+                    logger.error(f"After block: {after}")
+                    logger.error(f"Blocks payload: {json.dumps(blocks, indent=2)}")
                 if self._handle_rate_limit_error(e, attempt):
                     continue
                 raise

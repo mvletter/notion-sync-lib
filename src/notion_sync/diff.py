@@ -627,20 +627,31 @@ def execute_diff(
                     stats["deleted"] += 1
 
             elif op["op"] == "INSERT":
-                blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
+                prepared = _prepare_block_for_api(op["local_block"])
+                if prepared is None:
+                    logger.warning(f"Skipping INSERT at index {op['index']}: invalid block")
+                    continue
+                blocks_to_insert = [prepared]
                 # Use rate-limited append_blocks method (not direct API call)
                 result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                 last_block_id = result["results"][0]["id"]
                 stats["inserted"] += 1
 
             elif op["op"] == "REPLACE":
+                prepared = _prepare_block_for_api(op["local_block"])
+                if prepared is None:
+                    logger.warning(f"Skipping REPLACE at index {op['index']}: invalid block")
+                    last_block_id = op["notion_block_id"]
+                    stats["kept"] += 1
+                    continue
+                blocks_to_insert = [prepared]
+
                 if is_archived:
                     logger.debug(
                         "Skipping delete of archived block at index %d, inserting after",
                         op["index"]
                     )
                     last_block_id = op["notion_block_id"]
-                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
                     # Use rate-limited append_blocks method (not direct API call)
                     result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
@@ -648,7 +659,6 @@ def execute_diff(
                 else:
                     # Use recursive delete to handle blocks with children (e.g., toggles)
                     _delete_block_recursive(client, op["notion_block_id"])
-                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
                     # Use rate-limited append_blocks method (not direct API call)
                     result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
@@ -695,7 +705,7 @@ def _is_valid_notion_block(block: dict[str, Any]) -> bool:
     return True
 
 
-def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
+def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any] | None:
     """Deep copy a block and convert from internal format to Notion API format.
 
     Converts blocks from fetch_blocks_recursive format (with _children at root)
@@ -710,8 +720,13 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
         block: A block dictionary that may contain _children.
 
     Returns:
-        A deep copy of the block in Notion API format.
+        A deep copy of the block in Notion API format, or None if block is invalid.
     """
+    # CRITICAL: Validate block BEFORE processing
+    if not _is_valid_notion_block(block):
+        logger.warning(f"Skipping invalid block in _prepare_block_for_api: {block.get('type', 'NO_TYPE')}")
+        return None
+
     cleaned = copy.deepcopy(block)
 
     # Strip metadata fields that API doesn't accept in children
@@ -748,7 +763,8 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
                     )
                     continue
                 prepared_child = _prepare_block_for_api(child)
-                prepared_children.append(prepared_child)
+                if prepared_child is not None:
+                    prepared_children.append(prepared_child)
 
             # Only add children if we have valid ones
             if prepared_children:
