@@ -663,7 +663,7 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
     """Deep copy a block and convert from internal format to Notion API format.
 
     Converts blocks from fetch_blocks_recursive format (with _children at root)
-    to Notion API format (children inside block type property).
+    to Notion API format (with children inside block type property).
 
     Strips metadata fields (id, created_time, etc.) that Notion API doesn't accept
     in children arrays.
@@ -687,17 +687,11 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
     for field in metadata_fields:
         cleaned.pop(field, None)
 
-    # CRITICAL: Strip 'children' from block type property BEFORE processing _children
-    # Blocks from Notion API may have <type>.children (e.g., column.children with block IDs)
-    # These must be removed - the API only accepts children in _children format
-    block_type = cleaned.get("type")
-    if block_type and block_type in cleaned and isinstance(cleaned[block_type], dict):
-        cleaned[block_type].pop("children", None)
-
     # Convert _children to proper API format
     # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
     children = cleaned.pop("_children", None)
     if children:
+        block_type = cleaned.get("type")
         if block_type and block_type in cleaned:
             # Recursively prepare each child block
             # For toggles: _children → toggle.children
@@ -707,6 +701,7 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
             cleaned[block_type]["children"] = prepared_children
 
     return cleaned
+
 
 def _truncate(text: str, max_len: int) -> str:
     """Truncate text with ellipsis.
