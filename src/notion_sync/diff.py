@@ -595,6 +595,11 @@ def execute_diff(
                     elif block_type in _FILE_BASED_BLOCKS:
                         # For file-based blocks, only update caption (not type/file/external)
                         update_data = {block_type: {"caption": block_content.get("caption", [])}}
+                    elif block_type == "table":
+                        # Remove table_width - can't be updated, only used at creation
+                        block_content.pop("table_width", None)
+                        block_content.pop("children", None)
+                        update_data = {block_type: block_content}
                     elif block_type == "synced_block":
                         # For original synced blocks (not copies), synced_from must be null
                         # Notion API requires the field to be present, but cannot be updated
