@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-01-28
+
+### Fixed
+
+- **execute_recursive_diff children handling**: Fixed `body.children[0].{type} should be defined` error when updating blocks that contain children in their type-specific data (e.g., column blocks with `column.children`). The Notion API does not accept `children` properties in UPDATE requests - children are managed separately via the blocks API. Now strips `children` from block content before sending UPDATE requests, consistent with `execute_diff` behavior.
+
 ## [1.0.1] - 2026-01-27
 
 ### Fixed

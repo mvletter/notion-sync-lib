@@ -429,7 +429,11 @@ def execute_recursive_diff(
                     clean_content["synced_from"] = None
                 update_data = {local_type: clean_content}
             else:
-                update_data = {local_type: block_content}
+                # Remove children from block content - UPDATE operations cannot contain children
+                # Children are managed separately via the blocks API
+                clean_content = block_content.copy()
+                clean_content.pop("children", None)
+                update_data = {local_type: clean_content}
 
             client.update_block(block_id=block_id, data=update_data)
             stats["updated"] += 1
