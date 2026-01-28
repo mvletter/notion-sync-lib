@@ -680,6 +680,7 @@ def _is_valid_notion_block(block: dict[str, Any]) -> bool:
     A valid block must have:
     - type: string field
     - <type>: dict property (e.g., paragraph.rich_text, column.children)
+    - NOT be a child_database or child_page (unsupported via blocks API)
 
     Args:
         block: Block dictionary to validate.
@@ -692,6 +693,15 @@ def _is_valid_notion_block(block: dict[str, Any]) -> bool:
 
     block_type = block.get("type")
     if not block_type or not isinstance(block_type, str):
+        return False
+
+    # Filter out child_database and child_page blocks
+    # These CANNOT be added via blocks.children.append API
+    # They must be created via dedicated database/page creation endpoints
+    if block_type in ("child_database", "child_page"):
+        logger.warning(
+            f"Skipping {block_type} block: cannot be added via blocks API (use dedicated creation endpoint)"
+        )
         return False
 
     # Check if the type property exists and is a dict (required by Notion API)
