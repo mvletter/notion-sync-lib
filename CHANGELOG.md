@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-02-04
+
+### Fixed
+
+- **Archived blocks during delete**: Fixed silent failure when trying to delete archived blocks via Notion API. Previously logged as WARNING and caused orphaned blocks + false conflicts. Now detects archived block errors ("Can't edit block that is archived") and skips them at DEBUG level. Archived blocks remain in Notion as expected (read-only API limitation).
+
 ## [1.0.4] - 2026-01-28
 
 ### Fixed
@@ -124,6 +130,7 @@ This release marks the library as production-ready with comprehensive documentat
 
 - Import paths corrected for standalone pip installation
 
+[1.1.1]: https://github.com/mvletter/notion-sync-lib/releases/tag/v1.1.1
 [1.0.1]: https://github.com/mvletter/notion-sync-lib/releases/tag/v1.0.1
 [1.0.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v1.0.0
 [0.3.0]: https://github.com/mvletter/notion-sync-lib/releases/tag/v0.3.0
