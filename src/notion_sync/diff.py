@@ -502,7 +502,13 @@ def _delete_block_recursive(client: RateLimitedNotionClient, block_id: str) -> i
             client.delete_block(block_id=block_id)
             deleted_count += 1
         except Exception as e:
-            logger.warning(f"Failed to delete block {block_id}: {e}")
+            # Check if error is about archived blocks (API limitation)
+            # Archived blocks cannot be deleted via API and should be skipped
+            error_msg = str(e).lower()
+            if "archived" in error_msg or "can't edit block" in error_msg:
+                logger.debug(f"Skipping delete of archived block {block_id}")
+            else:
+                logger.warning(f"Failed to delete block {block_id}: {e}")
 
     return deleted_count
 
