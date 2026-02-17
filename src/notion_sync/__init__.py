@@ -60,7 +60,7 @@ from notion_sync.builders import (
 )
 
 # Utils
-from notion_sync.utils import get_notion_token, extract_page_id, extract_page_title, extract_page_icon
+from notion_sync.utils import get_notion_token, extract_page_id, extract_page_title, extract_page_icon, prepare_icon_for_api
 
 __all__ = [
     # Client
@@ -106,4 +106,5 @@ __all__ = [
     "extract_page_id",
     "extract_page_title",
     "extract_page_icon",
+    "prepare_icon_for_api",
 ]
