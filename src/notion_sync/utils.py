@@ -77,6 +77,26 @@ def extract_page_title(page: dict) -> str:
     raise ValueError("Could not find title property in page")
 
 
+def extract_page_icon(page: dict) -> dict | None:
+    """Extract icon object from a Notion page API response.
+
+    Returns the raw icon dict or None if no icon is set.
+
+    Icon types returned by the API:
+    - 'emoji':        {"type": "emoji", "emoji": "🚀"}
+    - 'external':     {"type": "external", "external": {"url": "..."}}
+    - 'file':         {"type": "file", "file": {"url": "...", "expiry_time": "..."}}
+    - 'custom_emoji': {"type": "custom_emoji", "custom_emoji": {"id": "...", "url": "..."}}
+
+    Args:
+        page: Page object from Notion API (from client.pages.retrieve()).
+
+    Returns:
+        Icon dict or None if no icon is set.
+    """
+    return page.get("icon") or None
+
+
 def extract_page_id(url: str) -> str:
     """Extract page ID from Notion URL and format as UUID.
 
