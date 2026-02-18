@@ -12,6 +12,7 @@ from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
 from notion_sync.extract import extract_block_text
+from notion_sync.utils import prepare_icon_for_api
 
 logger = logging.getLogger(__name__)
 
@@ -517,7 +518,8 @@ def execute_diff(
     client: RateLimitedNotionClient,
     ops: list[dict[str, Any]],
     page_id: str,
-    dry_run: bool = False
+    dry_run: bool = False,
+    notion_token: str | None = None,
 ) -> dict[str, int]:
     """Execute diff operations using Notion API.
 
@@ -533,6 +535,10 @@ def execute_diff(
         ops: List of operations from generate_diff.
         page_id: Notion page ID to sync to.
         dry_run: If True, only count operations without executing.
+        notion_token: Optional Notion API token. When provided, callout blocks
+            with workspace-hosted ('file'-type) icons are re-uploaded via the
+            File Upload API so the icon is preserved across workspace boundaries.
+            Without a token, such icons fall back to 'external' URL (may expire).
 
     Returns:
         Stats dict with counts: {kept, updated, inserted, deleted, replaced}
@@ -639,7 +645,7 @@ def execute_diff(
                     stats["skipped"] = stats.get("skipped", 0) + 1
                     continue
 
-                blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
+                blocks_to_insert = [_prepare_block_for_api(op["local_block"], notion_token=notion_token)]
                 # Use rate-limited append_blocks method (not direct API call)
                 result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                 last_block_id = result["results"][0]["id"]
@@ -659,7 +665,7 @@ def execute_diff(
                         op["index"]
                     )
                     last_block_id = op["notion_block_id"]
-                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
+                    blocks_to_insert = [_prepare_block_for_api(op["local_block"], notion_token=notion_token)]
                     # Use rate-limited append_blocks method (not direct API call)
                     result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
@@ -667,7 +673,7 @@ def execute_diff(
                 else:
                     # Use recursive delete to handle blocks with children (e.g., toggles)
                     _delete_block_recursive(client, op["notion_block_id"])
-                    blocks_to_insert = [_prepare_block_for_api(op["local_block"])]
+                    blocks_to_insert = [_prepare_block_for_api(op["local_block"], notion_token=notion_token)]
                     # Use rate-limited append_blocks method (not direct API call)
                     result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
                     last_block_id = result["results"][0]["id"]
@@ -683,7 +689,10 @@ def execute_diff(
     return stats
 
 
-def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
+def _prepare_block_for_api(
+    block: dict[str, Any],
+    notion_token: str | None = None,
+) -> dict[str, Any]:
     """Deep copy a block and convert from internal format to Notion API format.
 
     Converts blocks from fetch_blocks_recursive format (with _children at root)
@@ -692,10 +701,16 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
     Strips metadata fields (id, created_time, etc.) that Notion API doesn't accept
     in children arrays.
 
+    For callout blocks with workspace-hosted ('file'-type) icons: converts the icon
+    to a write-compatible format. When notion_token is provided the icon is re-uploaded
+    via the File Upload API and referenced by file_upload.id (permanent, cross-workspace
+    safe). Without a token it falls back to 'external' URL (expires in ~1 hour).
+
     # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
 
     Args:
         block: A block dictionary that may contain _children.
+        notion_token: Optional Notion API token for re-uploading 'file'-type callout icons.
 
     Returns:
         A deep copy of the block in Notion API format.
@@ -718,6 +733,19 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
     if block_type and block_type in cleaned and isinstance(cleaned[block_type], dict):
         cleaned[block_type].pop("children", None)
 
+    # Fix callout icons: 'file'-type icons from Notion's read API are not writable.
+    # Convert using prepare_icon_for_api which re-uploads to get a file_upload.id
+    # (permanent) when a token is provided, or falls back to external.url otherwise.
+    if block_type == "callout" and "callout" in cleaned:
+        icon = cleaned["callout"].get("icon")
+        if isinstance(icon, dict) and icon.get("type") == "file":
+            fixed_icon = prepare_icon_for_api(icon, notion_token=notion_token)
+            if fixed_icon:
+                cleaned["callout"]["icon"] = fixed_icon
+            else:
+                cleaned["callout"].pop("icon", None)
+                logger.warning("Dropped callout icon: could not convert from 'file' type")
+
     # Convert _children to proper API format
     # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
     children = cleaned.pop("_children", None)
@@ -734,7 +762,7 @@ def _prepare_block_for_api(block: dict[str, Any]) -> dict[str, Any]:
                 if child_type in ("child_database", "child_page"):
                     logger.debug(f"Skipping {child_type} block: cannot be added via blocks.children.append")
                     continue
-                prepared_children.append(_prepare_block_for_api(child))
+                prepared_children.append(_prepare_block_for_api(child, notion_token=notion_token))
 
             # Only add children if we have any after filtering
             if prepared_children:
