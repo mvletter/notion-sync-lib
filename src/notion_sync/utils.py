@@ -132,13 +132,25 @@ def prepare_icon_for_api(icon: dict | None, notion_token: str | None = None) -> 
     icon_type = icon.get("type")
 
     if icon_type == "emoji":
-        return {"type": "emoji", "emoji": icon["emoji"]}
+        emoji = icon.get("emoji")
+        if not emoji:
+            logger.warning("'emoji' icon has no emoji value, skipping icon sync")
+            return None
+        return {"type": "emoji", "emoji": emoji}
 
     if icon_type == "external":
-        return {"type": "external", "external": {"url": icon["external"]["url"]}}
+        url = (icon.get("external") or {}).get("url")
+        if not url:
+            logger.warning("'external' icon has no URL, skipping icon sync")
+            return None
+        return {"type": "external", "external": {"url": url}}
 
     if icon_type == "custom_emoji":
-        return {"type": "custom_emoji", "custom_emoji": {"id": icon["custom_emoji"]["id"]}}
+        custom_id = (icon.get("custom_emoji") or {}).get("id")
+        if not custom_id:
+            logger.warning("'custom_emoji' icon has no id, skipping icon sync")
+            return None
+        return {"type": "custom_emoji", "custom_emoji": {"id": custom_id}}
 
     if icon_type == "file":
         url = icon.get("file", {}).get("url")
