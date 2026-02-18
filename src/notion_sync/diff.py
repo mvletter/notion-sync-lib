@@ -38,8 +38,7 @@ _FILE_BASED_BLOCKS = frozenset([
 _STRUCTURE_ONLY_BLOCKS = frozenset([
     "table",  # table_width, has_column_header, has_row_header are immutable
               # Error: "body.table.table_width should be not present, instead was `3`"
-    "numbered_list_item"  # list_start_index is immutable after creation
-                          # Error: "body.numbered_list_item.list_start_index should be not present, instead was `3`"
+    # NOTE: numbered_list_item is NOT here - list_start_index is stripped before patch
 ])
 
 
@@ -607,6 +606,12 @@ def execute_diff(
                     elif block_type in _FILE_BASED_BLOCKS:
                         # For file-based blocks, only update caption (not type/file/external)
                         update_data = {block_type: {"caption": block_content.get("caption", [])}}
+                    elif block_type == "numbered_list_item":
+                        # list_start_index is immutable after creation - strip it before patch
+                        # Error: "body.numbered_list_item.list_start_index should be not present"
+                        block_content.pop("list_start_index", None)
+                        block_content.pop("children", None)
+                        update_data = {block_type: block_content}
                     elif block_type == "table":
                         # Remove table_width - can't be updated, only used at creation
                         block_content.pop("table_width", None)

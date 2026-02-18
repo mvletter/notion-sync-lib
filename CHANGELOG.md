@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-02-18
+
+### Fixed
+
+- **numbered_list_item translation skipped**: Fixed `numbered_list_item` blocks being completely skipped on UPDATE instead of having their text content updated. The `list_start_index` property is immutable after creation (Notion API error: "body.numbered_list_item.list_start_index should be not present"), but this only applies to that one property - the `rich_text` and other content can still be patched. Previously `numbered_list_item` was in `_STRUCTURE_ONLY_BLOCKS` which caused all updates to be silently dropped, leaving English (source) text in translated pages. Now strips `list_start_index` before sending the PATCH, consistent with how `table` handles `table_width`.
+
 ## [1.1.1] - 2026-02-04
 
 ### Fixed
