@@ -721,7 +721,19 @@ def execute_diff(
                     stats["updated"] += 1
 
             elif op["op"] == "DELETE":
-                if is_archived:
+                # Never delete non-creatable blocks (child_database, child_page).
+                # These cannot be re-added via the blocks API, so removing them
+                # would cause permanent data loss (e.g. Related Pages widget).
+                # Consistent with INSERT/REPLACE which also skip these types.
+                if notion_block and notion_block.get("type") in ("child_database", "child_page"):
+                    logger.debug(
+                        "Preserving non-creatable %s block at index %d (cannot be re-added via API)",
+                        notion_block.get("type"),
+                        op["index"],
+                    )
+                    last_block_id = op["notion_block_id"]
+                    stats["kept"] = stats.get("kept", 0) + 1
+                elif is_archived:
                     logger.debug(
                         "Skipping DELETE of archived block at index %d",
                         op["index"]
