@@ -29,6 +29,7 @@ from notion_sync.diff import (
     generate_recursive_diff,
     execute_diff,
     execute_recursive_diff,
+    execute_tree_sync,
     format_diff_preview,
     create_content_hash,
 )
@@ -80,6 +81,7 @@ __all__ = [
     "generate_recursive_diff",
     "execute_diff",
     "execute_recursive_diff",
+    "execute_tree_sync",
     "format_diff_preview",
     "create_content_hash",
     # Columns

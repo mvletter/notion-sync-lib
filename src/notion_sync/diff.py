@@ -143,12 +143,14 @@ def generate_diff(
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             # Blocks match - keep them
+            # local_block is included so callers (e.g. execute_tree_sync) can access
+            # the desired children state even for structurally-unchanged blocks.
             for ni, li in zip(range(i1, i2), range(j1, j2)):
                 ops.append({
                     "op": "KEEP",
                     "notion_block_id": old_blocks[ni]["id"],
                     "notion_block": old_blocks[ni],
-                    "local_block": None,
+                    "local_block": new_blocks[li],
                     "index": result_index
                 })
                 result_index += 1
@@ -298,6 +300,14 @@ def generate_recursive_diff(
         path_prefix: str = "",
     ) -> None:
         """Recursively compare blocks and collect UPDATE ops."""
+        if len(old_list) != len(new_list):
+            location = f"'{path_prefix}'" if path_prefix else "root"
+            raise ValueError(
+                f"Structure mismatch at {location}: "
+                f"old has {len(old_list)} blocks, new has {len(new_list)} blocks. "
+                "generate_recursive_diff requires identical structure (same block count at every level). "
+                "Use execute_tree_sync for structural changes (add/remove/reorder blocks)."
+            )
         for i, (old_block, new_block) in enumerate(zip(old_list, new_list)):
             path = f"{path_prefix}{i}" if path_prefix else str(i)
 
@@ -445,6 +455,84 @@ def execute_recursive_diff(
         except Exception as e:
             logger.error(f"Failed to update block at {path}: {e}")
             raise
+
+    return stats
+
+
+def execute_tree_sync(
+    client: RateLimitedNotionClient,
+    old_blocks: list[dict[str, Any]],
+    new_blocks: list[dict[str, Any]],
+    parent_id: str,
+    dry_run: bool = False,
+    notion_token: str | None = None,
+) -> dict[str, int]:
+    """Sync a block tree recursively using generate_diff at every nesting level.
+
+    Handles structural changes (add/remove/reorder) at ALL nesting levels, not
+    just the top level. Correctly handles blocks moving between nesting levels
+    (e.g., top-level blocks becoming children of a heading after a restructure).
+
+    **USE THIS FOR:**
+    - Force-retranslate (master structure may have changed since slave was created)
+    - Full page sync after structural master changes
+    - Any sync where child block counts may differ between old and new
+
+    **USE generate_recursive_diff + execute_recursive_diff FOR:**
+    - Content-only updates where structure is guaranteed identical (10x faster,
+      e.g. normal translation sync of an already-cloned page)
+
+    **Why not generate_recursive_diff for children:**
+    generate_recursive_diff uses zip() and silently drops extra blocks when
+    new_children has more items than old_children. This causes data loss when
+    blocks have moved from top-level into nested positions. execute_tree_sync
+    uses generate_diff at every level, which handles INSERT/DELETE/REPLACE.
+
+    Args:
+        client: RateLimitedNotionClient instance for API calls.
+        old_blocks: Current blocks in Notion (from fetch_blocks_recursive, with _children).
+        new_blocks: Desired blocks (translated/modified, with _children populated).
+        parent_id: Notion ID of the parent page or block to sync into.
+        dry_run: If True, only count operations without executing.
+        notion_token: Optional Notion API token for callout icon re-upload.
+
+    Returns:
+        Aggregated stats dict: {kept, updated, inserted, deleted, replaced, ...}
+    """
+    # Sync this level
+    ops = generate_diff(old_blocks, new_blocks)
+    stats = execute_diff(client, ops, parent_id, dry_run=dry_run, notion_token=notion_token)
+
+    # Recurse into children of KEEP and UPDATE blocks.
+    # INSERT/REPLACE already include children via _prepare_block_for_api.
+    # DELETE removes everything recursively.
+    for op in ops:
+        if op["op"] not in ("KEEP", "UPDATE"):
+            continue
+
+        notion_block = op["notion_block"]
+        local_block = op["local_block"]  # Always set: generate_diff includes local_block for KEEP
+
+        if local_block is None:
+            continue
+
+        old_children = notion_block.get("_children", [])
+        new_children = local_block.get("_children", [])
+
+        if not old_children and not new_children:
+            continue
+
+        child_stats = execute_tree_sync(
+            client=client,
+            old_blocks=old_children,
+            new_blocks=new_children,
+            parent_id=notion_block["id"],
+            dry_run=dry_run,
+            notion_token=notion_token,
+        )
+
+        for k, v in child_stats.items():
+            stats[k] = stats.get(k, 0) + v
 
     return stats
 
