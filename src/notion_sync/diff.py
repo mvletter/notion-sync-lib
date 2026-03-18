@@ -127,7 +127,7 @@ def generate_diff(
         - op: "KEEP" | "UPDATE" | "REPLACE" | "INSERT" | "DELETE"
         - notion_block_id: ID of Notion block (None for INSERT)
         - notion_block: Full Notion block (for archived check)
-        - local_block: Local block data (None for DELETE/KEEP)
+        - local_block: Local block data (None for DELETE; matched new block for KEEP, UPDATE, INSERT, REPLACE)
         - index: Position in the final result
     """
     # Create hashes for all blocks
