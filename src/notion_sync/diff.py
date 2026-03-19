@@ -503,14 +503,52 @@ def execute_tree_sync(
     ops = generate_diff(old_blocks, new_blocks)
     stats = execute_diff(client, ops, parent_id, dry_run=dry_run, notion_token=notion_token)
 
-    # When execute_diff performed a full reorder (delete-all + reinsert-all), children
-    # were already written to Notion as part of _prepare_block_for_api in the re-inserts.
-    # Do NOT recurse into children — they are already correct in Notion.
+    # When execute_diff performed a full reorder (delete-all + reinsert-all), blocks
+    # were re-inserted via _prepare_block_for_api which limits inline children to
+    # 2 levels (Notion API constraint). Children at depth 3+ were stripped and need
+    # a separate sync pass.
     if stats.pop("reordered", False):
+        if not dry_run:
+            # Re-fetch parent to get the newly inserted blocks with their Notion IDs.
+            # Then sync children of each block — a no-op for shallow blocks (no changes
+            # detected), but fixes depth-3+ blocks whose children were stripped inline.
+            from notion_sync.fetch import fetch_blocks_recursive
+            current_blocks = fetch_blocks_recursive(client, parent_id)
+            post_ops = generate_diff(current_blocks, new_blocks)
+            for op in post_ops:
+                if op["op"] != "KEEP":
+                    # After a clean reorder all blocks should match; skip unexpected diffs
+                    logger.debug("Unexpected post-reorder op %s — skipping child sync", op["op"])
+                    continue
+                notion_block = op["notion_block"]
+                local_block = op["local_block"]
+                if local_block is None:
+                    continue
+                old_children = notion_block.get("_children", [])
+                new_children = local_block.get("_children", [])
+                if not new_children:
+                    continue
+                child_stats = execute_tree_sync(
+                    client=client,
+                    old_blocks=old_children,
+                    new_blocks=new_children,
+                    parent_id=notion_block["id"],
+                    dry_run=dry_run,
+                    notion_token=notion_token,
+                )
+                for k, v in child_stats.items():
+                    stats[k] = stats.get(k, 0) + v
         return stats
 
+    def _has_deep_children(block: dict, d: int = 0) -> bool:
+        """Return True if block has _children at depth >= 2 (would be depth 3+ inline)."""
+        if d >= 2:
+            return bool(block.get("_children"))
+        return any(_has_deep_children(c, d + 1) for c in block.get("_children", []))
+
     # Recurse into children of KEEP and UPDATE blocks.
-    # INSERT/REPLACE already include children via _prepare_block_for_api.
+    # INSERT/REPLACE include children up to depth 2 inline (Notion API limit);
+    # depth 3+ children are synced in the post-pass below.
     # DELETE removes everything recursively.
     for op in ops:
         if op["op"] not in ("KEEP", "UPDATE"):
@@ -539,6 +577,42 @@ def execute_tree_sync(
 
         for k, v in child_stats.items():
             stats[k] = stats.get(k, 0) + v
+
+    # Post-sync for INSERT/REPLACE ops: handle depth-3+ children that were stripped
+    # from inline insertion by _prepare_block_for_api's depth limit. Without this pass,
+    # depth-3+ children are silently missing from Notion after the insert.
+    insert_replace_with_deep = [
+        op for op in ops
+        if op["op"] in ("INSERT", "REPLACE")
+        and op.get("local_block") is not None
+        and _has_deep_children(op["local_block"])
+    ]
+    if insert_replace_with_deep and not dry_run:
+        # Re-fetch to get Notion IDs of the newly created blocks, then sync their children.
+        from notion_sync.fetch import fetch_blocks_recursive
+        current_blocks = fetch_blocks_recursive(client, parent_id)
+        post_ops = generate_diff(current_blocks, new_blocks)
+        for op in post_ops:
+            if op["op"] != "KEEP":
+                continue
+            notion_block = op["notion_block"]
+            local_block = op["local_block"]
+            if local_block is None or not _has_deep_children(local_block):
+                continue
+            old_children = notion_block.get("_children", [])
+            new_children = local_block.get("_children", [])
+            if not new_children:
+                continue
+            child_stats = execute_tree_sync(
+                client=client,
+                old_blocks=old_children,
+                new_blocks=new_children,
+                parent_id=notion_block["id"],
+                dry_run=dry_run,
+                notion_token=notion_token,
+            )
+            for k, v in child_stats.items():
+                stats[k] = stats.get(k, 0) + v
 
     return stats
 
@@ -953,6 +1027,7 @@ def execute_diff(
 def _prepare_block_for_api(
     block: dict[str, Any],
     notion_token: str | None = None,
+    _depth: int = 0,
 ) -> dict[str, Any]:
     """Deep copy a block and convert from internal format to Notion API format.
 
@@ -1028,8 +1103,14 @@ def _prepare_block_for_api(
 
     # Convert _children to proper API format
     # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format
+    #
+    # Notion API inline nesting limit: append_block_children only accepts children
+    # 2 levels deep in the request body. Level 3+ causes a validation error:
+    #   "body.children[0].<type>.children[N].<type>.children should be not present"
+    # We enforce this by stripping children when _depth >= 2. Stripped children are
+    # written in a separate pass by _execute_reorder or execute_tree_sync recursion.
     children = cleaned.pop("_children", None)
-    if children:
+    if children and _depth < 2:
         if block_type and block_type in cleaned:
             # Recursively prepare each child block
             # For toggles: _children → toggle.children
@@ -1042,11 +1123,17 @@ def _prepare_block_for_api(
                 if child_type in ("child_database", "child_page"):
                     logger.debug(f"Skipping {child_type} block: cannot be added via blocks.children.append")
                     continue
-                prepared_children.append(_prepare_block_for_api(child, notion_token=notion_token))
+                prepared_children.append(_prepare_block_for_api(child, notion_token=notion_token, _depth=_depth + 1))
 
             # Only add children if we have any after filtering
             if prepared_children:
                 cleaned[block_type]["children"] = prepared_children
+    elif children and _depth >= 2:
+        logger.debug(
+            "Stripping children from %s block at inline depth %d "
+            "(Notion API allows max 2 levels inline; deeper children synced separately)",
+            block_type, _depth,
+        )
 
     return cleaned
 
