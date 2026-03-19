@@ -503,6 +503,12 @@ def execute_tree_sync(
     ops = generate_diff(old_blocks, new_blocks)
     stats = execute_diff(client, ops, parent_id, dry_run=dry_run, notion_token=notion_token)
 
+    # When execute_diff performed a full reorder (delete-all + reinsert-all), children
+    # were already written to Notion as part of _prepare_block_for_api in the re-inserts.
+    # Do NOT recurse into children — they are already correct in Notion.
+    if stats.pop("reordered", False):
+        return stats
+
     # Recurse into children of KEEP and UPDATE blocks.
     # INSERT/REPLACE already include children via _prepare_block_for_api.
     # DELETE removes everything recursively.
@@ -601,6 +607,148 @@ def _delete_block_recursive(client: RateLimitedNotionClient, block_id: str) -> i
     return deleted_count
 
 
+def _needs_reorder(ops: list[dict[str, Any]]) -> bool:
+    """Return True if the op sequence requires inserting blocks before existing ones.
+
+    The Notion API's ``append_block_children`` can only insert AFTER an existing
+    block (via the ``after`` parameter).  When ``after=None``, blocks are appended
+    to the END of the parent — there is no "prepend" operation.
+
+    This means that when ``generate_diff`` produces INSERT ops that should appear
+    BEFORE KEEP/UPDATE blocks in the final result, executing them naively would
+    place those inserts at the wrong position (end instead of beginning).
+
+    Example problem case::
+
+        ops = [INSERT X, KEEP A, KEEP B, DELETE C]
+        # execute_diff would: insert X at end, keep A, keep B, delete C
+        # Result: [A, B, X] — wrong! X should be before A.
+
+    Returns:
+        True when any INSERT appears before a KEEP/UPDATE op (while last_block_id
+        would still be None), indicating that a full delete+reinsert is needed.
+    """
+    seen_anchor = False  # becomes True once last_block_id would be set in execute_diff
+    for i, op in enumerate(ops):
+        if op["op"] in ("KEEP", "UPDATE", "REPLACE"):
+            seen_anchor = True
+        elif op["op"] == "INSERT":
+            if not seen_anchor:
+                # INSERT with no prior anchor — would go to END.
+                # Only a problem if KEEP/UPDATE blocks follow (wrong relative order).
+                has_keep_after = any(
+                    o["op"] in ("KEEP", "UPDATE") for o in ops[i + 1:]
+                )
+                if has_keep_after:
+                    return True
+            seen_anchor = True
+        # DELETE does not set last_block_id
+    return False
+
+
+def _execute_reorder(
+    client: RateLimitedNotionClient,
+    ops: list[dict[str, Any]],
+    page_id: str,
+    dry_run: bool = False,
+    notion_token: str | None = None,
+) -> dict[str, Any]:
+    """Handle block reordering by deleting all existing blocks and re-inserting in order.
+
+    Called when :func:`_needs_reorder` detects that blocks need to be inserted
+    before existing KEEP/UPDATE blocks — which the Notion API cannot do directly.
+
+    Strategy:
+    1. Delete all existing Notion blocks referenced in ops (KEEP, UPDATE, DELETE,
+       REPLACE).  Non-creatable blocks (child_database, child_page) are preserved.
+    2. Re-insert all non-deleted blocks in the correct order, each time using the
+       previous block's ID as the ``after`` anchor so that ordering is correct.
+
+    Because :func:`_prepare_block_for_api` recursively includes children, the
+    caller (:func:`execute_tree_sync`) **must not** recurse into the children of
+    KEEP/UPDATE blocks after this function returns — those children are already
+    written to Notion as part of the re-insert.
+
+    Returns:
+        Stats dict (same shape as :func:`execute_diff`) plus ``reordered=True``
+        so that :func:`execute_tree_sync` knows to skip child recursion.
+    """
+    _NON_CREATABLE = ("child_database", "child_page")
+    stats: dict[str, Any] = {
+        "kept": 0, "updated": 0, "inserted": 0, "deleted": 0, "replaced": 0,
+        "reordered": True,
+    }
+
+    if dry_run:
+        for op in ops:
+            if op["op"] == "KEEP":
+                stats["kept"] += 1
+            elif op["op"] == "UPDATE":
+                stats["updated"] += 1
+            elif op["op"] == "INSERT":
+                stats["inserted"] += 1
+            elif op["op"] == "DELETE":
+                stats["deleted"] += 1
+            elif op["op"] == "REPLACE":
+                stats["replaced"] += 1
+        return stats
+
+    logger.info(
+        "Reorder detected for parent %s — deleting all existing blocks and "
+        "re-inserting in correct order (%d ops)", page_id, len(ops)
+    )
+
+    # Step 1: Delete all existing Notion blocks (KEEP, UPDATE, DELETE, REPLACE).
+    # Non-creatable blocks cannot be deleted via the API and must stay in place.
+    for op in ops:
+        block_id = op.get("notion_block_id")
+        if not block_id:
+            continue
+        notion_block = op.get("notion_block")
+        if notion_block and notion_block.get("type") in _NON_CREATABLE:
+            logger.debug("Preserving non-creatable %s during reorder", notion_block.get("type"))
+            continue
+        if notion_block and notion_block.get("archived", False):
+            logger.debug("Skipping delete of archived block %s during reorder", block_id)
+            continue
+        _delete_block_recursive(client, block_id)
+
+    # Step 2: Re-insert all non-deleted blocks in the desired order.
+    last_block_id: str | None = None
+    for op in ops:
+        if op["op"] == "DELETE":
+            stats["deleted"] += 1
+            continue  # Was deleted above; not re-inserted
+
+        local_block = op.get("local_block")
+        if not local_block:
+            continue
+
+        if local_block.get("type") in _NON_CREATABLE:
+            logger.debug(
+                "Skipping re-insert of non-creatable %s during reorder",
+                local_block.get("type")
+            )
+            continue
+
+        block_to_insert = _prepare_block_for_api(local_block, notion_token=notion_token)
+        result = client.append_blocks(
+            page_id=page_id, blocks=[block_to_insert], after=last_block_id
+        )
+        last_block_id = result["results"][0]["id"]
+
+        if op["op"] == "KEEP":
+            stats["kept"] += 1
+        elif op["op"] == "UPDATE":
+            stats["updated"] += 1
+        elif op["op"] == "INSERT":
+            stats["inserted"] += 1
+        elif op["op"] == "REPLACE":
+            stats["replaced"] += 1
+
+    return stats
+
+
 def execute_diff(
     client: RateLimitedNotionClient,
     ops: list[dict[str, Any]],
@@ -634,6 +782,14 @@ def execute_diff(
         Exception: On API errors during execution.
     """
     stats = {"kept": 0, "updated": 0, "inserted": 0, "deleted": 0, "replaced": 0}
+
+    # When INSERT ops must precede KEEP/UPDATE blocks (reordering), the Notion API
+    # cannot position them correctly with append_block_children (after=None → END).
+    # Fall back to a full delete-then-reinsert strategy for this parent level.
+    if _needs_reorder(ops):
+        return _execute_reorder(
+            client, ops, page_id, dry_run=dry_run, notion_token=notion_token
+        )
 
     if dry_run:
         for op in ops:
@@ -837,6 +993,25 @@ def _prepare_block_for_api(
     block_type = cleaned.get("type")
     if block_type and block_type in cleaned and isinstance(cleaned[block_type], dict):
         cleaned[block_type].pop("children", None)
+
+    # Convert hosted images to write-compatible external format.
+    # Notion read API returns workspace-hosted images as {"type": "file", "file": {...}}.
+    # The write API only accepts {"type": "external", "external": {"url": "..."}} or
+    # {"type": "file_upload", "file_upload": {"id": "..."}}.
+    # Convert to "external" using the (temporary) S3 URL so INSERT operations succeed.
+    if block_type == "image" and block_type in cleaned:
+        image_data = cleaned[block_type]
+        if isinstance(image_data, dict) and image_data.get("type") == "file":
+            file_url = image_data.get("file", {}).get("url", "")
+            if file_url:
+                cleaned[block_type] = {
+                    "type": "external",
+                    "external": {"url": file_url},
+                    "caption": image_data.get("caption", []),
+                }
+                logger.debug("Converted hosted image block to external format for API write")
+            else:
+                logger.warning("Image block has file type but no URL — cannot convert for write")
 
     # Fix callout icons: 'file'-type icons from Notion's read API are not writable.
     # Convert using prepare_icon_for_api which re-uploads to get a file_upload.id
