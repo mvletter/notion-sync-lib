@@ -942,6 +942,14 @@ def execute_diff(
                             block_content["synced_from"] = None
                         block_content.pop("children", None)
                         update_data = {block_type: block_content}
+                    elif block_type == "column":
+                        # width_ratio must be < 1 or omitted — API rejects >= 1
+                        # Error: "body.column.width_ratio should be < 1 or undefined, instead was 1"
+                        if block_content.get("width_ratio", 0) >= 1:
+                            block_content.pop("width_ratio", None)
+                            logger.debug("Stripped invalid width_ratio >= 1 from column block (UPDATE path)")
+                        block_content.pop("children", None)
+                        update_data = {block_type: block_content}
                     else:
                         # Remove children - can't update children via block update API
                         block_content.pop("children", None)
@@ -1109,6 +1117,17 @@ def _prepare_block_for_api(
     #   "body.children[0].<type>.children[N].<type>.children should be not present"
     # We enforce this by stripping children when _depth >= 2. Stripped children are
     # written in a separate pass by _execute_reorder or execute_tree_sync recursion.
+    # Fix column blocks: width_ratio of 1 is invalid for the Notion API write endpoint.
+    # The API requires width_ratio to be < 1 or omitted entirely.
+    # Error: "body.children[N].column.width_ratio should be < 1 or undefined, instead was 1"
+    if block_type == "column" and "column" in cleaned:
+        column_data = cleaned["column"]
+        if isinstance(column_data, dict):
+            width_ratio = column_data.get("width_ratio")
+            if width_ratio is not None and width_ratio >= 1:
+                column_data.pop("width_ratio")
+                logger.debug(f"Stripped invalid width_ratio={width_ratio} from column block (INSERT path)")
+
     children = cleaned.pop("_children", None)
     if children and _depth < 2:
         if block_type and block_type in cleaned:
@@ -1122,6 +1141,15 @@ def _prepare_block_for_api(
                 # Skip child_database and child_page - cannot be added via blocks API
                 if child_type in ("child_database", "child_page"):
                     logger.debug(f"Skipping {child_type} block: cannot be added via blocks.children.append")
+                    continue
+                # Skip column_list as an inline child — Notion API rejects column_list
+                # nested inside another block's children array. column_list must always
+                # be a top-level block created via a separate append call.
+                if child_type == "column_list" and _depth >= 1:
+                    logger.debug(
+                        f"Skipping column_list at inline depth {_depth}: must be created "
+                        f"as a top-level block via separate append (Notion API restriction)"
+                    )
                     continue
                 prepared_children.append(_prepare_block_for_api(child, notion_token=notion_token, _depth=_depth + 1))
 
