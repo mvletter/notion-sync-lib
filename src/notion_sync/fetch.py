@@ -13,6 +13,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _strip_null_icon(block: dict) -> None:
+    """Remove icon=null from a block's type-specific content dict (in-place).
+
+    Notion's read API returns icon:null for some block types as an internal
+    artefact. The write API rejects it with:
+      "body.children[0].{type}.icon should be an object or `undefined`, instead was `null`"
+
+    Blocks without an icon key, or with a valid icon value, pass through unmodified.
+    """
+    block_type = block.get("type")
+    if not block_type:
+        return
+    content = block.get(block_type)
+    if isinstance(content, dict) and "icon" in content and content["icon"] is None:
+        content.pop("icon")
+
+
 def fetch_page_blocks(client: "RateLimitedNotionClient", page_id: str) -> list[dict]:
     """Fetch top-level blocks from a Notion page.
 
@@ -28,6 +45,8 @@ def fetch_page_blocks(client: "RateLimitedNotionClient", page_id: str) -> list[d
     """
     logger.debug(f"Fetching top-level blocks for page {page_id}")
     blocks = client.get_blocks(page_id)
+    for block in blocks:
+        _strip_null_icon(block)
     logger.debug(f"Fetched {len(blocks)} top-level blocks")
     return blocks
 
@@ -67,6 +86,10 @@ def fetch_blocks_recursive(client: "RateLimitedNotionClient", page_id: str) -> l
 
             # Create a copy to avoid mutating the original
             enriched_block = dict(block)
+
+            # Strip icon:null before processing — Notion read API returns this as an
+            # internal artefact that the write API rejects.
+            _strip_null_icon(enriched_block)
 
             if has_children:
                 logger.debug(
