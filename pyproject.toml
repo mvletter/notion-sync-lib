@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "notion-sync-lib"
-version = "1.2.3"
+version = "1.2.4"
 description = "Sync Notion pages like Git commits. Smart content-based diffing, automatic rate limiting, zero headaches."
 readme = "README.md"
 license = "MIT"
@@ -42,6 +42,7 @@ classifiers = [
 dependencies = [
     "notion-client>=2.0.0",
     "python-dotenv>=1.0.0",
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]

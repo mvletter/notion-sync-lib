@@ -177,6 +177,12 @@ def prepare_icon_for_api(icon: dict | None, notion_token: str | None = None) -> 
 def _reupload_file_icon(url: str, notion_token: str) -> str | None:
     """Download a Notion-hosted file icon and re-upload via the File Upload API.
 
+    S3 pre-signed URLs cannot be passed directly to Notion's external_url upload
+    mode — Notion tries to fetch them itself but they are not publicly accessible.
+    Instead, this function downloads the file locally and uploads the raw bytes via
+    the two-step file_uploads API (init → send), matching the pattern used for
+    image blocks in Herald's new_page_blocks.py.
+
     Args:
         url: Pre-signed S3 URL from Notion API response.
         notion_token: Notion API token for the upload.
@@ -185,28 +191,88 @@ def _reupload_file_icon(url: str, notion_token: str) -> str | None:
         File upload ID string, or None on failure.
     """
     import hashlib
+    import mimetypes
+    import os
+    import tempfile
 
     try:
-        from notion_upload import notion_upload  # type: ignore[import]
+        import requests
     except ImportError:
-        logger.warning("notion-upload not installed; cannot re-upload file icon")
+        logger.warning("requests not installed; cannot re-upload file icon")
         return None
 
-    try:
-        url_path = url.split("?")[0]
-        ext = ".png"
-        if "." in url_path.rsplit("/", 1)[-1]:
-            ext = "." + url_path.rsplit(".", 1)[-1][:4]
-        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
-        filename = f"icon_{url_hash}{ext}"
+    url_path = url.split("?")[0]
+    ext = ".png"
+    if "." in url_path.rsplit("/", 1)[-1]:
+        ext = "." + url_path.rsplit(".", 1)[-1][:4]
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+    filename = f"icon_{url_hash}{ext}"
 
-        logger.debug(f"Re-uploading file icon: {filename}")
-        file_id = notion_upload(url, filename, notion_token).upload()
-        if file_id:
-            logger.debug(f"Re-uploaded file icon → file_upload id={file_id}")
-            return str(file_id)
+    logger.debug(f"Re-uploading file icon: {filename}")
+
+    tmp_path = None
+    try:
+        # Step 1: Download the file locally.
+        # S3 pre-signed URLs may require auth — try without first, then with Bearer.
+        resp = None
+        for dl_headers in ({}, {"Authorization": f"Bearer {notion_token}"}):
+            r = requests.get(url, headers=dl_headers, stream=True, timeout=30)
+            if r.status_code == 200:
+                resp = r
+                break
+            logger.debug(f"Icon download returned {r.status_code}, retrying with auth")
+
+        if resp is None:
+            logger.warning(f"Failed to download file icon for re-upload: {filename}")
+            return None
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            for chunk in resp.iter_content(8192):
+                tmp.write(chunk)
+            tmp_path = tmp.name
+
+        # Step 2: Upload to Notion via the two-step file_uploads API.
+        mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        notion_headers = {
+            "Authorization": f"Bearer {notion_token}",
+            "Notion-Version": "2022-06-28",
+        }
+
+        init_resp = requests.post(
+            "https://api.notion.com/v1/file_uploads",
+            headers={**notion_headers, "Content-Type": "application/json"},
+            json={"filename": filename, "content_type": mime_type},
+            timeout=15,
+        )
+        if init_resp.status_code != 200:
+            logger.warning(f"File upload init failed ({init_resp.status_code}) for {filename}: {init_resp.text}")
+            return None
+
+        file_id = init_resp.json().get("id")
+        if not file_id:
+            logger.warning(f"File upload init returned no id for {filename}")
+            return None
+
+        with open(tmp_path, "rb") as f:
+            send_resp = requests.post(
+                f"https://api.notion.com/v1/file_uploads/{file_id}/send",
+                headers=notion_headers,
+                files={"file": (filename, f, mime_type)},
+                timeout=30,
+            )
+
+        if send_resp.status_code != 200:
+            logger.warning(f"File upload send failed ({send_resp.status_code}) for {filename}: {send_resp.text}")
+            return None
+
+        logger.debug(f"Re-uploaded file icon → file_upload id={file_id}")
+        return str(file_id)
+
     except Exception as e:
         logger.warning(f"Failed to re-upload file icon: {e}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
     return None
 
