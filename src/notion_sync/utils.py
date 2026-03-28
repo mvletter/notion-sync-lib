@@ -174,8 +174,48 @@ def prepare_icon_for_api(icon: dict | None, notion_token: str | None = None) -> 
     return None
 
 
-def _reupload_file_icon(url: str, notion_token: str) -> str | None:
-    """Download a Notion-hosted file icon and re-upload via the File Upload API.
+def prepare_image_for_api(image_content: dict, notion_token: str | None = None) -> dict:
+    """Convert a workspace-hosted image block to Notion API write format.
+
+    Notion read API returns workspace-hosted images as {"type": "file", "file": {...}}.
+    The write API only accepts "external" or "file_upload" types.
+
+    When notion_token is provided, downloads the image and re-uploads via the File
+    Upload API to get a permanent file_upload.id that never expires.
+    Without a token, falls back to the S3 "external" URL (expires in ~1 hour).
+
+    Args:
+        image_content: The image block content dict (has "file", "external", or
+            "file_upload" key).
+        notion_token: Optional Notion API token for re-uploading hosted images.
+
+    Returns:
+        Image content dict ready for Notion API write.
+    """
+    caption = image_content.get("caption", [])
+
+    if "file" in image_content:
+        url = image_content["file"].get("url", "")
+    elif "external" in image_content:
+        url = image_content["external"].get("url", "")
+    else:
+        return image_content
+
+    if not url:
+        logger.warning("Image block has no URL — cannot convert for write")
+        return image_content
+
+    if notion_token:
+        file_id = _reupload_file_icon(url, notion_token, prefix="image")
+        if file_id:
+            return {"type": "file_upload", "file_upload": {"id": file_id}, "caption": caption}
+        logger.warning("Image re-upload failed — falling back to external URL (will expire)")
+
+    return {"type": "external", "external": {"url": url}, "caption": caption}
+
+
+def _reupload_file_icon(url: str, notion_token: str, prefix: str = "icon") -> str | None:
+    """Download a Notion-hosted file and re-upload via the File Upload API.
 
     S3 pre-signed URLs cannot be passed directly to Notion's external_url upload
     mode — Notion tries to fetch them itself but they are not publicly accessible.
@@ -186,6 +226,7 @@ def _reupload_file_icon(url: str, notion_token: str) -> str | None:
     Args:
         url: Pre-signed S3 URL from Notion API response.
         notion_token: Notion API token for the upload.
+        prefix: Filename prefix for the temp file (e.g. "icon" or "image").
 
     Returns:
         File upload ID string, or None on failure.
@@ -198,7 +239,7 @@ def _reupload_file_icon(url: str, notion_token: str) -> str | None:
     try:
         import requests
     except ImportError:
-        logger.warning("requests not installed; cannot re-upload file icon")
+        logger.warning("requests not installed; cannot re-upload file")
         return None
 
     url_path = url.split("?")[0]
@@ -206,9 +247,9 @@ def _reupload_file_icon(url: str, notion_token: str) -> str | None:
     if "." in url_path.rsplit("/", 1)[-1]:
         ext = "." + url_path.rsplit(".", 1)[-1][:4]
     url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
-    filename = f"icon_{url_hash}{ext}"
+    filename = f"{prefix}_{url_hash}{ext}"
 
-    logger.debug(f"Re-uploading file icon: {filename}")
+    logger.debug(f"Re-uploading {prefix}: {filename}")
 
     tmp_path = None
     try:
@@ -265,11 +306,11 @@ def _reupload_file_icon(url: str, notion_token: str) -> str | None:
             logger.warning(f"File upload send failed ({send_resp.status_code}) for {filename}: {send_resp.text}")
             return None
 
-        logger.debug(f"Re-uploaded file icon → file_upload id={file_id}")
+        logger.debug(f"Re-uploaded {prefix} → file_upload id={file_id}")
         return str(file_id)
 
     except Exception as e:
-        logger.warning(f"Failed to re-upload file icon: {e}")
+        logger.warning(f"Failed to re-upload {prefix}: {e}")
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

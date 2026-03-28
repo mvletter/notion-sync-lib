@@ -12,7 +12,7 @@ from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
 from notion_sync.extract import extract_block_text
-from notion_sync.utils import prepare_icon_for_api
+from notion_sync.utils import prepare_icon_for_api, prepare_image_for_api
 
 logger = logging.getLogger(__name__)
 
@@ -426,7 +426,14 @@ def execute_recursive_diff(
 
             # Use restricted update for certain block types
             if local_type in _RICH_TEXT_ONLY_BLOCKS:
-                update_data = {local_type: {"rich_text": block_content.get("rich_text", [])}}
+                restricted = {"rich_text": block_content.get("rich_text", [])}
+                # Headings: also sync is_toggleable so children can be added/removed
+                if local_type in ("heading_1", "heading_2", "heading_3"):
+                    if "is_toggleable" in block_content:
+                        restricted["is_toggleable"] = block_content["is_toggleable"]
+                    if "color" in block_content:
+                        restricted["color"] = block_content["color"]
+                update_data = {local_type: restricted}
             elif local_type in _FILE_BASED_BLOCKS:
                 # For file-based blocks, only update caption (not type/file/external)
                 update_data = {local_type: {"caption": block_content.get("caption", [])}}
@@ -565,6 +572,24 @@ def execute_tree_sync(
 
         if not old_children and not new_children:
             continue
+
+        # Safety: if a heading needs children but isn't toggleable on the
+        # Notion side, flip is_toggleable=True before attempting child sync.
+        notion_type = notion_block.get("type", "")
+        if (
+            notion_type in ("heading_1", "heading_2", "heading_3")
+            and new_children
+            and not notion_block.get(notion_type, {}).get("is_toggleable", False)
+            and not dry_run
+        ):
+            logger.info(
+                "Setting is_toggleable=True on %s %s before syncing children",
+                notion_type, notion_block["id"][:12],
+            )
+            client.update_block(
+                block_id=notion_block["id"],
+                data={notion_type: {"is_toggleable": True}},
+            )
 
         child_stats = execute_tree_sync(
             client=client,
@@ -920,7 +945,14 @@ def execute_diff(
                     block_content = op["local_block"][block_type].copy()
                     # Use restricted update for certain block types
                     if block_type in _RICH_TEXT_ONLY_BLOCKS:
-                        update_data = {block_type: {"rich_text": block_content.get("rich_text", [])}}
+                        restricted = {"rich_text": block_content.get("rich_text", [])}
+                        # Headings: also sync is_toggleable so children can be added/removed
+                        if block_type in ("heading_1", "heading_2", "heading_3"):
+                            if "is_toggleable" in block_content:
+                                restricted["is_toggleable"] = block_content["is_toggleable"]
+                            if "color" in block_content:
+                                restricted["color"] = block_content["color"]
+                        update_data = {block_type: restricted}
                     elif block_type in _FILE_BASED_BLOCKS:
                         # For file-based blocks, only update caption (not type/file/external)
                         update_data = {block_type: {"caption": block_content.get("caption", [])}}
@@ -1077,24 +1109,16 @@ def _prepare_block_for_api(
     if block_type and block_type in cleaned and isinstance(cleaned[block_type], dict):
         cleaned[block_type].pop("children", None)
 
-    # Convert hosted images to write-compatible external format.
+    # Convert hosted images to write-compatible format.
     # Notion read API returns workspace-hosted images as {"type": "file", "file": {...}}.
-    # The write API only accepts {"type": "external", "external": {"url": "..."}} or
-    # {"type": "file_upload", "file_upload": {"id": "..."}}.
-    # Convert to "external" using the (temporary) S3 URL so INSERT operations succeed.
+    # The write API only accepts {"type": "external", ...} or {"type": "file_upload", ...}.
+    # When notion_token is provided: download + re-upload for a permanent file_upload.id.
+    # Without token: fall back to "external" with the S3 URL (expires in ~1 hour).
     if block_type == "image" and block_type in cleaned:
         image_data = cleaned[block_type]
         if isinstance(image_data, dict) and image_data.get("type") == "file":
-            file_url = image_data.get("file", {}).get("url", "")
-            if file_url:
-                cleaned[block_type] = {
-                    "type": "external",
-                    "external": {"url": file_url},
-                    "caption": image_data.get("caption", []),
-                }
-                logger.debug("Converted hosted image block to external format for API write")
-            else:
-                logger.warning("Image block has file type but no URL — cannot convert for write")
+            cleaned[block_type] = prepare_image_for_api(image_data, notion_token=notion_token)
+            logger.debug("Converted hosted image block for API write")
 
     # Fix callout icons: 'file'-type icons from Notion's read API are not writable.
     # Convert using prepare_icon_for_api which re-uploads to get a file_upload.id
