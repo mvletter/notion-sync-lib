@@ -586,9 +586,13 @@ def execute_tree_sync(
                 "Setting is_toggleable=True on %s %s before syncing children",
                 notion_type, notion_block["id"][:12],
             )
+            existing_content = notion_block.get(notion_type, {})
             client.update_block(
                 block_id=notion_block["id"],
-                data={notion_type: {"is_toggleable": True}},
+                data={notion_type: {
+                    "rich_text": existing_content.get("rich_text", []),
+                    "is_toggleable": True,
+                }},
             )
 
         child_stats = execute_tree_sync(
