@@ -4,7 +4,7 @@ import logging
 import time
 from typing import Any
 
-from notion_client import Client, APIResponseError
+from notion_client import APIResponseError, Client
 from notion_client.errors import HTTPResponseError
 
 from notion_sync.utils import get_notion_token
@@ -45,7 +45,9 @@ class RateLimitedNotionClient:
         self._last_request_time = time.time()
         self.request_count += 1
 
-    def _handle_rate_limit_error(self, e: APIResponseError | HTTPResponseError, attempt: int) -> bool:
+    def _handle_rate_limit_error(
+        self, e: APIResponseError | HTTPResponseError, attempt: int,
+    ) -> bool:
         """Handle API errors with exponential backoff (429, 502, 503, 504).
 
         Args:
@@ -63,9 +65,38 @@ class RateLimitedNotionClient:
             logger.error(f"Max retry attempts reached after {e.status} errors")
             return False
         wait_time = 2 ** attempt
-        logger.warning(f"API error {e.status}, waiting {wait_time}s before retry (attempt {attempt + 1}/{MAX_RETRIES})...")
+        logger.warning(
+            f"API error {e.status}, waiting {wait_time}s before retry "
+            f"(attempt {attempt + 1}/{MAX_RETRIES})...",
+        )
         time.sleep(wait_time)
         return True
+
+    def _execute_with_retry(self, operation_name: str, func, *args, **kwargs) -> Any:
+        """Execute an API call with rate limiting and retry logic.
+
+        Args:
+            operation_name: Human-readable name for error messages (e.g. "get page abc123").
+            func: The Notion API function to call.
+            *args: Positional arguments for func.
+            **kwargs: Keyword arguments for func.
+
+        Returns:
+            The return value of func.
+
+        Raises:
+            APIResponseError: On non-retryable API errors.
+            Exception: If all retries are exhausted.
+        """
+        for attempt in range(MAX_RETRIES):
+            self._wait_for_rate_limit()
+            try:
+                return func(*args, **kwargs)
+            except (APIResponseError, HTTPResponseError) as e:
+                if self._handle_rate_limit_error(e, attempt):
+                    continue
+                raise
+        raise Exception(f"Failed to {operation_name} after {MAX_RETRIES} retries")
 
     def get_page(self, page_id: str) -> dict[str, Any]:
         """Get page metadata.
@@ -80,15 +111,10 @@ class RateLimitedNotionClient:
             APIResponseError: On API errors after retries exhausted.
             Exception: If all retries fail.
         """
-        for attempt in range(MAX_RETRIES):
-            self._wait_for_rate_limit()
-            try:
-                return self.notion.pages.retrieve(page_id=page_id)
-            except (APIResponseError, HTTPResponseError) as e:
-                if self._handle_rate_limit_error(e, attempt):
-                    continue
-                raise
-        raise Exception(f"Failed to get page {page_id} after {MAX_RETRIES} retries")
+        return self._execute_with_retry(
+            f"get page {page_id}",
+            self.notion.pages.retrieve, page_id=page_id,
+        )
 
     def get_blocks(self, block_id: str) -> list[dict[str, Any]]:
         """Get child blocks of a block or page.
@@ -105,19 +131,13 @@ class RateLimitedNotionClient:
         """
         from notion_client.helpers import collect_paginated_api
 
-        for attempt in range(MAX_RETRIES):
-            self._wait_for_rate_limit()
-            try:
-                blocks = collect_paginated_api(
-                    self.notion.blocks.children.list,
-                    block_id=block_id
-                )
-                return list(blocks)
-            except (APIResponseError, HTTPResponseError) as e:
-                if self._handle_rate_limit_error(e, attempt):
-                    continue
-                raise
-        raise Exception(f"Failed to get blocks for {block_id} after {MAX_RETRIES} retries")
+        def _fetch():
+            return list(collect_paginated_api(
+                self.notion.blocks.children.list,
+                block_id=block_id,
+            ))
+
+        return self._execute_with_retry(f"get blocks for {block_id}", _fetch)
 
     def append_blocks(
         self,
@@ -139,25 +159,23 @@ class RateLimitedNotionClient:
             APIResponseError: On API errors after retries exhausted.
             Exception: If all retries fail.
         """
-        for attempt in range(MAX_RETRIES):
-            self._wait_for_rate_limit()
-            try:
-                kwargs: dict[str, Any] = {"block_id": page_id, "children": blocks}
-                if after:
-                    kwargs["after"] = after
-                return self.notion.blocks.children.append(**kwargs)
-            except (APIResponseError, HTTPResponseError) as e:
-                # Log the problematic blocks payload on validation errors
-                if "body failed validation" in str(e) or "should be defined" in str(e):
-                    import json
-                    logger.error(f"Notion API validation error. Problematic payload:")
-                    logger.error(f"Page ID: {page_id}")
-                    logger.error(f"After block: {after}")
-                    logger.error(f"Blocks payload: {json.dumps(blocks, indent=2)}")
-                if self._handle_rate_limit_error(e, attempt):
-                    continue
-                raise
-        raise Exception(f"Failed to append blocks to {page_id} after {MAX_RETRIES} retries")
+        kwargs: dict[str, Any] = {"block_id": page_id, "children": blocks}
+        if after:
+            kwargs["after"] = after
+        try:
+            return self._execute_with_retry(
+                f"append blocks to {page_id}",
+                self.notion.blocks.children.append, **kwargs,
+            )
+        except (APIResponseError, HTTPResponseError) as e:
+            # Log the problematic blocks payload on validation errors
+            if "body failed validation" in str(e) or "should be defined" in str(e):
+                import json
+                logger.error("Notion API validation error. Problematic payload:")
+                logger.error(f"Page ID: {page_id}")
+                logger.error(f"After block: {after}")
+                logger.error(f"Blocks payload: {json.dumps(blocks, indent=2)}")
+            raise
 
     def delete_block(self, block_id: str) -> dict[str, Any]:
         """Delete a block.
@@ -172,15 +190,10 @@ class RateLimitedNotionClient:
             APIResponseError: On API errors after retries exhausted.
             Exception: If all retries fail.
         """
-        for attempt in range(MAX_RETRIES):
-            self._wait_for_rate_limit()
-            try:
-                return self.notion.blocks.delete(block_id=block_id)
-            except (APIResponseError, HTTPResponseError) as e:
-                if self._handle_rate_limit_error(e, attempt):
-                    continue
-                raise
-        raise Exception(f"Failed to delete block {block_id} after {MAX_RETRIES} retries")
+        return self._execute_with_retry(
+            f"delete block {block_id}",
+            self.notion.blocks.delete, block_id=block_id,
+        )
 
     def update_block(self, block_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """Update a block.
@@ -196,15 +209,10 @@ class RateLimitedNotionClient:
             APIResponseError: On API errors after retries exhausted.
             Exception: If all retries fail.
         """
-        for attempt in range(MAX_RETRIES):
-            self._wait_for_rate_limit()
-            try:
-                return self.notion.blocks.update(block_id=block_id, **data)
-            except (APIResponseError, HTTPResponseError) as e:
-                if self._handle_rate_limit_error(e, attempt):
-                    continue
-                raise
-        raise Exception(f"Failed to update block {block_id} after {MAX_RETRIES} retries")
+        return self._execute_with_retry(
+            f"update block {block_id}",
+            self.notion.blocks.update, block_id=block_id, **data,
+        )
 
     def update_page_title(self, page_id: str, title: str) -> dict[str, Any]:
         """Update a page's title.
@@ -220,27 +228,21 @@ class RateLimitedNotionClient:
             APIResponseError: On API errors after retries exhausted.
             Exception: If all retries fail.
         """
-        for attempt in range(MAX_RETRIES):
-            self._wait_for_rate_limit()
-            try:
-                return self.notion.pages.update(
-                    page_id=page_id,
-                    properties={
-                        "title": {
-                            "title": [
-                                {
-                                    "type": "text",
-                                    "text": {"content": title}
-                                }
-                            ]
+        return self._execute_with_retry(
+            f"update page title {page_id}",
+            self.notion.pages.update,
+            page_id=page_id,
+            properties={
+                "title": {
+                    "title": [
+                        {
+                            "type": "text",
+                            "text": {"content": title}
                         }
-                    }
-                )
-            except (APIResponseError, HTTPResponseError) as e:
-                if self._handle_rate_limit_error(e, attempt):
-                    continue
-                raise
-        raise Exception(f"Failed to update page title {page_id} after {MAX_RETRIES} retries")
+                    ]
+                }
+            },
+        )
 
 
 def get_notion_client() -> RateLimitedNotionClient:

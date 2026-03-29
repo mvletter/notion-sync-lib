@@ -62,6 +62,69 @@ def _is_synced_copy(block: dict[str, Any]) -> bool:
     return synced_from is not None
 
 
+def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
+    """Sanitize block content for Notion UPDATE API.
+
+    Single source of truth for all block type sanitization during UPDATE
+    operations. Returns the update_data dict ready for client.update_block().
+
+    Rules by block type:
+    - _RICH_TEXT_ONLY_BLOCKS: restricted to rich_text + heading props (is_toggleable, color)
+    - _FILE_BASED_BLOCKS: caption only
+    - numbered_list_item: strip list_start_index, children
+    - synced_block: null synced_from, strip children
+    - column: strip width_ratio >= 1, strip children
+    - default: strip children, strip icon (non-callout)
+
+    Note: table blocks are in _STRUCTURE_ONLY_BLOCKS and should be skipped
+    BEFORE calling this function (they cannot be updated at all).
+
+    Args:
+        block_type: The Notion block type string (e.g. "paragraph", "heading_1").
+        block_content: The block type content dict (e.g. block["paragraph"]).
+            This dict is NOT mutated — a copy is made internally.
+
+    Returns:
+        Dict ready for client.update_block(data=...), e.g. {"paragraph": {...}}.
+    """
+    if block_type in _RICH_TEXT_ONLY_BLOCKS:
+        restricted = {"rich_text": block_content.get("rich_text", [])}
+        if block_type in ("heading_1", "heading_2", "heading_3"):
+            if "is_toggleable" in block_content:
+                restricted["is_toggleable"] = block_content["is_toggleable"]
+            if "color" in block_content:
+                restricted["color"] = block_content["color"]
+        return {block_type: restricted}
+
+    if block_type in _FILE_BASED_BLOCKS:
+        return {block_type: {"caption": block_content.get("caption", [])}}
+
+    # All remaining types need a mutable copy
+    clean = block_content.copy()
+
+    if block_type == "numbered_list_item":
+        clean.pop("list_start_index", None)
+        clean.pop("children", None)
+        return {block_type: clean}
+
+    if block_type == "synced_block":
+        if "synced_from" in clean:
+            clean["synced_from"] = None
+        clean.pop("children", None)
+        return {block_type: clean}
+
+    if block_type == "column":
+        if clean.get("width_ratio", 0) >= 1:
+            clean.pop("width_ratio", None)
+        clean.pop("children", None)
+        return {block_type: clean}
+
+    # Default: strip children + icon
+    clean.pop("children", None)
+    clean.pop("icon", None)
+    return {block_type: clean}
+
+
 def create_content_hash(block: dict[str, Any]) -> str:
     """Create a stable hash for a Notion block based on its content.
 
@@ -127,7 +190,8 @@ def generate_diff(
         - op: "KEEP" | "UPDATE" | "REPLACE" | "INSERT" | "DELETE"
         - notion_block_id: ID of Notion block (None for INSERT)
         - notion_block: Full Notion block (for archived check)
-        - local_block: Local block data (None for DELETE; matched new block for KEEP, UPDATE, INSERT, REPLACE)
+        - local_block: Local block data (None for DELETE; matched new block for KEEP, UPDATE,
+            INSERT, REPLACE)
         - index: Position in the final result
     """
     # Create hashes for all blocks
@@ -305,8 +369,9 @@ def generate_recursive_diff(
             raise ValueError(
                 f"Structure mismatch at {location}: "
                 f"old has {len(old_list)} blocks, new has {len(new_list)} blocks. "
-                "generate_recursive_diff requires identical structure (same block count at every level). "
-                "Use execute_tree_sync for structural changes (add/remove/reorder blocks)."
+                "generate_recursive_diff requires identical structure "
+                "(same block count at every level). "
+                "Use execute_tree_sync for structural changes."
             )
         for i, (old_block, new_block) in enumerate(zip(old_list, new_list)):
             path = f"{path_prefix}{i}" if path_prefix else str(i)
@@ -404,7 +469,10 @@ def execute_recursive_diff(
 
         # Check for structure-only blocks (immutable structural properties)
         if local_type in _STRUCTURE_ONLY_BLOCKS:
-            logger.debug(f"Skipping {local_type} block at {path} - structural properties are immutable, only children can be updated")
+            logger.debug(
+                "Skipping %s block at %s - structural properties are immutable",
+                local_type, path,
+            )
             stats["skipped"] += 1
             continue
 
@@ -423,38 +491,7 @@ def execute_recursive_diff(
                 continue
 
             block_content = local_block[local_type]
-
-            # Use restricted update for certain block types
-            if local_type in _RICH_TEXT_ONLY_BLOCKS:
-                restricted = {"rich_text": block_content.get("rich_text", [])}
-                # Headings: also sync is_toggleable so children can be added/removed
-                if local_type in ("heading_1", "heading_2", "heading_3"):
-                    if "is_toggleable" in block_content:
-                        restricted["is_toggleable"] = block_content["is_toggleable"]
-                    if "color" in block_content:
-                        restricted["color"] = block_content["color"]
-                update_data = {local_type: restricted}
-            elif local_type in _FILE_BASED_BLOCKS:
-                # For file-based blocks, only update caption (not type/file/external)
-                update_data = {local_type: {"caption": block_content.get("caption", [])}}
-            elif local_type == "synced_block":
-                # For original synced blocks (not copies), synced_from must be null
-                # Notion API requires the field to be present, but cannot be updated
-                clean_content = block_content.copy()
-                # Ensure synced_from is null (not undefined/missing)
-                if "synced_from" in clean_content:
-                    clean_content["synced_from"] = None
-                update_data = {local_type: clean_content}
-            else:
-                # Remove children from block content - UPDATE operations cannot contain children
-                # Children are managed separately via the blocks API
-                clean_content = block_content.copy()
-                clean_content.pop("children", None)
-                # Strip icon — Notion read API returns icon:null on paragraph blocks
-                # as an artefact; the write API rejects it with "Cannot set icon on a
-                # paragraph block that is not a direct child of a tab block".
-                clean_content.pop("icon", None)
-                update_data = {local_type: clean_content}
+            update_data = _sanitize_for_update(local_type, block_content)
 
             client.update_block(block_id=block_id, data=update_data)
             stats["updated"] += 1
@@ -942,61 +979,16 @@ def execute_diff(
                     stats["kept"] += 1
                 elif op["local_block"]["type"] in _STRUCTURE_ONLY_BLOCKS:
                     logger.debug(
-                        "Skipping UPDATE of %s block at index %d - structural properties are immutable",
+                        "Skipping UPDATE of %s block at index %d - structural",
                         op["local_block"]["type"],
-                        op["index"]
+                        op["index"],
                     )
                     last_block_id = op["notion_block_id"]
                     stats["kept"] += 1
                 else:
                     block_type = op["local_block"]["type"]
-                    block_content = op["local_block"][block_type].copy()
-                    # Use restricted update for certain block types
-                    if block_type in _RICH_TEXT_ONLY_BLOCKS:
-                        restricted = {"rich_text": block_content.get("rich_text", [])}
-                        # Headings: also sync is_toggleable so children can be added/removed
-                        if block_type in ("heading_1", "heading_2", "heading_3"):
-                            if "is_toggleable" in block_content:
-                                restricted["is_toggleable"] = block_content["is_toggleable"]
-                            if "color" in block_content:
-                                restricted["color"] = block_content["color"]
-                        update_data = {block_type: restricted}
-                    elif block_type in _FILE_BASED_BLOCKS:
-                        # For file-based blocks, only update caption (not type/file/external)
-                        update_data = {block_type: {"caption": block_content.get("caption", [])}}
-                    elif block_type == "numbered_list_item":
-                        # list_start_index is immutable after creation - strip it before patch
-                        # Error: "body.numbered_list_item.list_start_index should be not present"
-                        block_content.pop("list_start_index", None)
-                        block_content.pop("children", None)
-                        update_data = {block_type: block_content}
-                    elif block_type == "table":
-                        # Remove table_width - can't be updated, only used at creation
-                        block_content.pop("table_width", None)
-                        block_content.pop("children", None)
-                        update_data = {block_type: block_content}
-                    elif block_type == "synced_block":
-                        # For original synced blocks (not copies), synced_from must be null
-                        # Notion API requires the field to be present, but cannot be updated
-                        if "synced_from" in block_content:
-                            block_content["synced_from"] = None
-                        block_content.pop("children", None)
-                        update_data = {block_type: block_content}
-                    elif block_type == "column":
-                        # width_ratio must be < 1 or omitted — API rejects >= 1
-                        # Error: "body.column.width_ratio should be < 1 or undefined, instead was 1"
-                        if block_content.get("width_ratio", 0) >= 1:
-                            block_content.pop("width_ratio", None)
-                            logger.debug("Stripped invalid width_ratio >= 1 from column block (UPDATE path)")
-                        block_content.pop("children", None)
-                        update_data = {block_type: block_content}
-                    else:
-                        # Remove children - can't update children via block update API
-                        block_content.pop("children", None)
-                        # Strip icon — Notion read API returns icon:null on paragraph
-                        # blocks; write API rejects it unless inside a tab block.
-                        block_content.pop("icon", None)
-                        update_data = {block_type: block_content}
+                    block_content = op["local_block"][block_type]
+                    update_data = _sanitize_for_update(block_type, block_content)
                     client.update_block(block_id=op["notion_block_id"], data=update_data)
                     last_block_id = op["notion_block_id"]
                     stats["updated"] += 1
@@ -1008,7 +1000,7 @@ def execute_diff(
                 # Consistent with INSERT/REPLACE which also skip these types.
                 if notion_block and notion_block.get("type") in ("child_database", "child_page"):
                     logger.debug(
-                        "Preserving non-creatable %s block at index %d (cannot be re-added via API)",
+                        "Preserving non-creatable %s block at index %d",
                         notion_block.get("type"),
                         op["index"],
                     )
@@ -1027,20 +1019,29 @@ def execute_diff(
             elif op["op"] == "INSERT":
                 # Skip child_database and child_page blocks - cannot be added via blocks API
                 if op["local_block"].get("type") in ("child_database", "child_page"):
-                    logger.info(f"Skipping INSERT of {op['local_block']['type']} block at index {op['index']}")
+                    logger.info(
+                        "Skipping INSERT of %s block at index %d",
+                        op["local_block"]["type"], op["index"],
+                    )
                     stats["skipped"] = stats.get("skipped", 0) + 1
                     continue
 
-                blocks_to_insert = [_prepare_block_for_api(op["local_block"], notion_token=notion_token)]
-                # Use rate-limited append_blocks method (not direct API call)
-                result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
+                blocks_to_insert = [
+                    _prepare_block_for_api(op["local_block"], notion_token=notion_token)
+                ]
+                result = client.append_blocks(
+                    page_id=page_id, blocks=blocks_to_insert, after=last_block_id,
+                )
                 last_block_id = result["results"][0]["id"]
                 stats["inserted"] += 1
 
             elif op["op"] == "REPLACE":
                 # Skip child_database and child_page blocks - cannot be added via blocks API
                 if op["local_block"].get("type") in ("child_database", "child_page"):
-                    logger.info(f"Skipping REPLACE of {op['local_block']['type']} block at index {op['index']}")
+                    logger.info(
+                        "Skipping REPLACE of %s block at index %d",
+                        op["local_block"]["type"], op["index"],
+                    )
                     last_block_id = op["notion_block_id"]
                     stats["skipped"] = stats.get("skipped", 0) + 1
                     continue
@@ -1051,17 +1052,23 @@ def execute_diff(
                         op["index"]
                     )
                     last_block_id = op["notion_block_id"]
-                    blocks_to_insert = [_prepare_block_for_api(op["local_block"], notion_token=notion_token)]
-                    # Use rate-limited append_blocks method (not direct API call)
-                    result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
+                    blocks_to_insert = [
+                        _prepare_block_for_api(op["local_block"], notion_token=notion_token)
+                    ]
+                    result = client.append_blocks(
+                        page_id=page_id, blocks=blocks_to_insert, after=last_block_id,
+                    )
                     last_block_id = result["results"][0]["id"]
                     stats["inserted"] += 1
                 else:
                     # Use recursive delete to handle blocks with children (e.g., toggles)
                     _delete_block_recursive(client, op["notion_block_id"])
-                    blocks_to_insert = [_prepare_block_for_api(op["local_block"], notion_token=notion_token)]
-                    # Use rate-limited append_blocks method (not direct API call)
-                    result = client.append_blocks(page_id=page_id, blocks=blocks_to_insert, after=last_block_id)
+                    blocks_to_insert = [
+                        _prepare_block_for_api(op["local_block"], notion_token=notion_token)
+                    ]
+                    result = client.append_blocks(
+                        page_id=page_id, blocks=blocks_to_insert, after=last_block_id,
+                    )
                     last_block_id = result["results"][0]["id"]
                     stats["replaced"] += 1
 
@@ -1167,7 +1174,10 @@ def _prepare_block_for_api(
             width_ratio = column_data.get("width_ratio")
             if width_ratio is not None and width_ratio >= 1:
                 column_data.pop("width_ratio")
-                logger.debug(f"Stripped invalid width_ratio={width_ratio} from column block (INSERT path)")
+                logger.debug(
+                    "Stripped invalid width_ratio=%s from column block (INSERT path)",
+                    width_ratio,
+                )
 
     children = cleaned.pop("_children", None)
     if children and _depth < 2:
@@ -1181,7 +1191,10 @@ def _prepare_block_for_api(
                 child_type = child.get("type")
                 # Skip child_database and child_page - cannot be added via blocks API
                 if child_type in ("child_database", "child_page"):
-                    logger.debug(f"Skipping {child_type} block: cannot be added via blocks.children.append")
+                    logger.debug(
+                        "Skipping %s block: cannot be added via blocks.children.append",
+                        child_type,
+                    )
                     continue
                 # Skip column_list as an inline child — Notion API rejects column_list
                 # nested inside another block's children array. column_list must always
@@ -1192,7 +1205,9 @@ def _prepare_block_for_api(
                         f"as a top-level block via separate append (Notion API restriction)"
                     )
                     continue
-                prepared_children.append(_prepare_block_for_api(child, notion_token=notion_token, _depth=_depth + 1))
+                prepared_children.append(
+                    _prepare_block_for_api(child, notion_token=notion_token, _depth=_depth + 1)
+                )
 
             # Only add children if we have any after filtering
             if prepared_children:
