@@ -7,8 +7,6 @@
 
 Not another CRUD wrapper—this is a **sync engine** that understands your content and makes minimal changes automatically.
 
-**Battle-tested:** 120,000+ blocks synced in production at Voys
-
 ```python
 from notion_sync import get_notion_client, generate_diff, execute_diff
 
@@ -294,7 +292,7 @@ if confirm():
 - ✅ **Request tracking** - Monitor API usage
 
 ### Production-Ready
-- ✅ **Battle-tested** - 120,000+ blocks synced in production at Voys
+- ✅ **Battle-tested** - 120,000+ blocks synced in production
 - ✅ **Error resilience** - Handles archived blocks, API errors gracefully
 - ✅ **Type safety** - Full type hints (passes mypy strict mode)
 - ✅ **Comprehensive tests** - 116 tests (91 unit + 25 integration)
@@ -376,7 +374,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Credits
 
-Built by [Mark Vletter](https://github.com/mvletter) for handling large-scale Notion translation workflows at [Voys](https://www.voys.nl/).
+Built by [Mark Vletter](https://github.com/mvletter) for handling large-scale Notion translation workflows.
 
 Inspired by Git's diff algorithm and the need for a production-ready Notion sync tool.
 
