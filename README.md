@@ -294,7 +294,7 @@ if confirm():
 ### Production-Ready
 - ✅ **Error resilience** - Handles archived blocks, API errors gracefully
 - ✅ **Type safety** - Full type hints (passes mypy strict mode)
-- ✅ **Comprehensive tests** - 25 integration tests
+- ✅ **Comprehensive tests** - 116 tests (91 unit + 25 integration)
 - ✅ **Well documented** - Usage guide + API reference + pitfalls doc
 
 ---

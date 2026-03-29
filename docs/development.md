@@ -65,16 +65,18 @@ notion-sync-lib/
 │   ├── builders.py           # Block creation utilities
 │   └── utils.py              # Token and URL utilities
 │
-├── tests/                     # Integration test suite
-│   ├── conftest.py           # Pytest fixtures and helpers
-│   ├── test_live_basic.py    # Basic operations tests
-│   ├── test_live_diff.py     # Diff functionality tests
-│   ├── test_live_columns.py  # Column operations tests
-│   ├── test_live_advanced.py # Advanced features tests
-│   ├── test_live_block_types.py  # Block type tests
-│   ├── test_live_zz_user_actions.py  # Manual user action tests
-│   ├── test_columns.py       # Unit tests for column utilities
-│   └── test_width_ratio.py   # Width ratio handling tests
+├── tests/                     # Test suite
+│   ├── conftest.py                    # Pytest fixtures and helpers
+│   ├── test_live_basic.py             # Basic operations tests (integration)
+│   ├── test_live_diff.py              # Diff functionality tests (integration)
+│   ├── test_live_columns.py           # Column operations tests (integration)
+│   ├── test_live_advanced.py          # Advanced features tests (integration)
+│   ├── test_live_block_types.py       # Block type tests (integration)
+│   ├── test_live_zz_user_actions.py   # Manual user action tests (integration)
+│   ├── test_columns.py                # Unit tests for column utilities
+│   ├── test_width_ratio.py            # Width ratio handling tests
+│   ├── test_sanitization.py           # Unit tests for _sanitize_for_update (all block types)
+│   └── test_utils.py                  # Unit tests for utility functions
 │
 ├── docs/                      # Documentation
 │   ├── usage-guide.md        # Complete usage guide
@@ -95,23 +97,25 @@ notion-sync-lib/
 
 ### Test Suite Overview
 
-The integration test suite has **25 tests total**:
-- 23 automated tests
-- 2 manual tests (require user interaction)
+The test suite has **116 tests total**:
+- 91 unit tests (no API token required)
+- 25 integration tests (require `NOTION_API_TOKEN` + `TEST_PAGE_ID`):
+  - 23 automated integration tests
+  - 2 manual tests (require user interaction)
 
 ### Running Automated Tests
 
 ```bash
-# All automated tests with logging
+# Unit tests only (no env vars needed)
+pytest tests/test_sanitization.py tests/test_columns.py tests/test_width_ratio.py tests/test_utils.py -v
+
+# All integration tests (require NOTION_API_TOKEN + TEST_PAGE_ID)
 pytest -v --log-cli-level=INFO -m "not manual"
 
-# Specific test files
+# Specific integration test files
 pytest tests/test_live_basic.py -v --log-cli-level=INFO
 pytest tests/test_live_diff.py -v --log-cli-level=INFO
 pytest tests/test_live_columns.py -v --log-cli-level=INFO
-
-# Unit tests only
-pytest tests/test_columns.py tests/test_width_ratio.py -v
 ```
 
 ### Running Manual Tests

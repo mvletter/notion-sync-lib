@@ -99,6 +99,8 @@ Before writing code with these patterns, read docs/pitfalls.md:
 - Inserting blocks with children (toggles, column_list) → #api-nested-blocks-format
 - `_prepare_block_for_api` → #api-nested-blocks-format
 - Try/catch blocks → #error-catch-all
+- Adding UPDATE behavior for a new block type → #api-update-sanitization-spread
+- Editing sanitization in `execute_diff` or `execute_recursive_diff` → #api-update-sanitization-spread
 
 When stuck → Read docs/pitfalls.md fully.
 

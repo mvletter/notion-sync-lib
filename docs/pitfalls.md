@@ -140,6 +140,40 @@ Always convert recursively when preparing blocks from `fetch_blocks_recursive` f
 
 ---
 
+## api-update-sanitization-spread
+
+**Trigger:** Adding UPDATE behavior for a new block type, editing sanitization in execute_diff or execute_recursive_diff
+
+`_sanitize_for_update()` in `diff.py` is the **single source of truth** for all block UPDATE sanitization.
+Both `execute_diff` and `execute_recursive_diff` call it.
+
+If you add a special UPDATE case inline in one function instead, the other function won't get it — and you'll have diverged behavior that's hard to notice until a rare edge case fires.
+
+❌ Wrong:
+```python
+# In execute_recursive_diff only:
+if block_type == "my_new_block":
+    clean.pop("some_field", None)
+    update_data = {block_type: clean}
+
+# execute_diff still uses old path → inconsistent behavior
+```
+
+✅ Right:
+```python
+# In _sanitize_for_update() in diff.py:
+if block_type == "my_new_block":
+    clean.pop("some_field", None)
+    clean.pop("children", None)
+    return {block_type: clean}
+
+# Both execute_diff and execute_recursive_diff automatically pick it up
+```
+
+**AI-CONTEXT:** See `src/notion_sync/diff.py` → `_sanitize_for_update()`
+
+---
+
 ---
 
 ## Templates (remove when adding real entries)
