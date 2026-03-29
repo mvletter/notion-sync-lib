@@ -450,6 +450,10 @@ def execute_recursive_diff(
                 # Children are managed separately via the blocks API
                 clean_content = block_content.copy()
                 clean_content.pop("children", None)
+                # Strip icon — Notion read API returns icon:null on paragraph blocks
+                # as an artefact; the write API rejects it with "Cannot set icon on a
+                # paragraph block that is not a direct child of a tab block".
+                clean_content.pop("icon", None)
                 update_data = {local_type: clean_content}
 
             client.update_block(block_id=block_id, data=update_data)
@@ -989,6 +993,9 @@ def execute_diff(
                     else:
                         # Remove children - can't update children via block update API
                         block_content.pop("children", None)
+                        # Strip icon — Notion read API returns icon:null on paragraph
+                        # blocks; write API rejects it unless inside a tab block.
+                        block_content.pop("icon", None)
                         update_data = {block_type: block_content}
                     client.update_block(block_id=op["notion_block_id"], data=update_data)
                     last_block_id = op["notion_block_id"]
@@ -1112,6 +1119,12 @@ def _prepare_block_for_api(
     block_type = cleaned.get("type")
     if block_type and block_type in cleaned and isinstance(cleaned[block_type], dict):
         cleaned[block_type].pop("children", None)
+        # Strip icon — Notion read API returns icon:null on paragraph blocks
+        # as an artefact; the write API rejects it with "Cannot set icon on a
+        # paragraph block that is not a direct child of a tab block".
+        # Callout icons are handled separately below (they need conversion, not removal).
+        if block_type != "callout":
+            cleaned[block_type].pop("icon", None)
 
     # Convert hosted images to write-compatible format.
     # Notion read API returns workspace-hosted images as {"type": "file", "file": {...}}.
