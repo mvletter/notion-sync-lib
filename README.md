@@ -7,6 +7,8 @@
 
 Not another CRUD wrapper—this is a **sync engine** that understands your content and makes minimal changes automatically.
 
+**Battle-tested:** 120,000+ blocks synced in production at Voys
+
 ```python
 from notion_sync import get_notion_client, generate_diff, execute_diff
 
@@ -292,6 +294,7 @@ if confirm():
 - ✅ **Request tracking** - Monitor API usage
 
 ### Production-Ready
+- ✅ **Battle-tested** - 120,000+ blocks synced in production at Voys
 - ✅ **Error resilience** - Handles archived blocks, API errors gracefully
 - ✅ **Type safety** - Full type hints (passes mypy strict mode)
 - ✅ **Comprehensive tests** - 116 tests (91 unit + 25 integration)
