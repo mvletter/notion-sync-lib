@@ -283,7 +283,7 @@ def _reupload_file_icon(url: str, notion_token: str, prefix: str = "icon") -> st
             "https://api.notion.com/v1/file_uploads",
             headers={**notion_headers, "Content-Type": "application/json"},
             json={"filename": filename, "content_type": mime_type},
-            timeout=15,
+            timeout=30,
         )
         if init_resp.status_code != 200:
             logger.warning(f"File upload init failed ({init_resp.status_code}) for {filename}: {init_resp.text}")

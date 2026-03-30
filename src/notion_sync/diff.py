@@ -855,7 +855,11 @@ def _execute_reorder(
             logger.debug("Preserving non-creatable %s during reorder", notion_block.get("type"))
             continue
         if notion_block and notion_block.get("archived", False):
-            logger.debug("Skipping delete of archived block %s during reorder", block_id)
+            try:
+                _delete_block_recursive(client, block_id)
+                logger.debug("Deleted archived block %s during reorder", block_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to delete archived block %s during reorder: %s", block_id, exc)
             continue
         _delete_block_recursive(client, block_id)
 
@@ -966,12 +970,33 @@ def execute_diff(
 
             elif op["op"] == "UPDATE":
                 if is_archived:
-                    logger.debug(
-                        "Skipping UPDATE of archived block at index %d",
-                        op["index"]
-                    )
-                    last_block_id = op["notion_block_id"]
-                    stats["kept"] += 1
+                    # Archived block: attempt to unarchive+update content in one PATCH.
+                    # If Notion rejects (block unrestorable), fall back to insert new block.
+                    block_type = op["local_block"]["type"]
+                    block_content = op["local_block"][block_type]
+                    update_data = _sanitize_for_update(block_type, block_content)
+                    update_data["archived"] = False
+                    try:
+                        client.update_block(block_id=op["notion_block_id"], data=update_data)
+                        last_block_id = op["notion_block_id"]
+                        stats["updated"] += 1
+                        logger.debug(
+                            "Unarchived+updated block at index %d",
+                            op["index"],
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to unarchive+update archived block at index %d: %s — inserting new",
+                            op["index"], exc,
+                        )
+                        blocks_to_insert = [
+                            _prepare_block_for_api(op["local_block"], notion_token=notion_token)
+                        ]
+                        result = client.append_blocks(
+                            page_id=page_id, blocks=blocks_to_insert, after=last_block_id,
+                        )
+                        last_block_id = result["results"][0]["id"]
+                        stats["inserted"] += 1
                 elif notion_block and _is_synced_copy(notion_block):
                     logger.debug(
                         "Skipping UPDATE of synced copy block at index %d - read-only reference",
@@ -1009,10 +1034,18 @@ def execute_diff(
                     last_block_id = op["notion_block_id"]
                     stats["kept"] = stats.get("kept", 0) + 1
                 elif is_archived:
-                    logger.debug(
-                        "Skipping DELETE of archived block at index %d",
-                        op["index"]
-                    )
+                    # Archived block: try to permanently remove it.
+                    # last_block_id is intentionally NOT updated so the positioning
+                    # anchor stays at the previous visible block.
+                    try:
+                        _delete_block_recursive(client, op["notion_block_id"])
+                        stats["deleted"] += 1
+                        logger.debug("Deleted archived block at index %d", op["index"])
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to delete archived block at index %d: %s — skipping",
+                            op["index"], exc,
+                        )
                 else:
                     # Use recursive delete to handle blocks with children (e.g., toggles)
                     _delete_block_recursive(client, op["notion_block_id"])
@@ -1049,11 +1082,17 @@ def execute_diff(
                     continue
 
                 if is_archived:
-                    logger.debug(
-                        "Skipping delete of archived block at index %d, inserting after",
-                        op["index"]
-                    )
-                    last_block_id = op["notion_block_id"]
+                    # Try to delete the archived block so it doesn't leave an orphan.
+                    # If delete fails, fall back to inserting after it (old behaviour).
+                    try:
+                        _delete_block_recursive(client, op["notion_block_id"])
+                        logger.debug("Deleted archived block at index %d before REPLACE", op["index"])
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to delete archived block at index %d: %s — leaving orphan",
+                            op["index"], exc,
+                        )
+                        last_block_id = op["notion_block_id"]  # Insert after it as fallback
                     blocks_to_insert = [
                         _prepare_block_for_api(op["local_block"], notion_token=notion_token)
                     ]
