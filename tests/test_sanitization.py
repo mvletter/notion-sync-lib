@@ -527,15 +527,33 @@ class TestSkippedBlocks:
         assert not client.update_block.called
         assert stats["skipped"] == 1
 
-    def test_diff_skips_archived(self):
+    def test_diff_unarchives_and_updates_archived(self):
+        """Archived blocks should be unarchived+updated in one PATCH call."""
         client = _make_mock_client()
         op = _make_diff_op("paragraph", {
             "rich_text": [{"type": "text", "text": {"content": "archived"}}],
         })
         op["notion_block"]["archived"] = True
         stats = execute_diff(client, [op], page_id="page-1")
-        assert not client.update_block.called
-        assert stats["kept"] == 1
+        assert client.update_block.called
+        data = _get_update_data(client)
+        assert data.get("archived") is False
+        assert "paragraph" in data
+        assert stats["updated"] == 1
+
+    def test_diff_archived_fallback_insert(self):
+        """If unarchive+update fails, insert a fresh block instead."""
+        client = _make_mock_client()
+        client.update_block.side_effect = Exception("Can't edit archived block")
+        client.append_blocks.return_value = {"results": [{"id": "new-block-1"}]}
+        op = _make_diff_op("paragraph", {
+            "rich_text": [{"type": "text", "text": {"content": "archived"}}],
+        })
+        op["notion_block"]["archived"] = True
+        stats = execute_diff(client, [op], page_id="page-1")
+        assert client.update_block.called
+        assert client.append_blocks.called
+        assert stats["inserted"] == 1
 
     def test_recursive_diff_skips_synced_copy(self):
         client = _make_mock_client()
