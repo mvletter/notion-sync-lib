@@ -38,6 +38,8 @@ _FILE_BASED_BLOCKS = frozenset([
 _STRUCTURE_ONLY_BLOCKS = frozenset([
     "table",  # table_width, has_column_header, has_row_header are immutable
               # Error: "body.table.table_width should be not present, instead was `3`"
+    "tab",  # tab: {} is empty; content is in paragraph children
+    "meeting_notes",  # read-only: cannot create, update, or delete via API
     # NOTE: numbered_list_item is NOT here - list_start_index is stripped before patch
 ])
 
@@ -817,7 +819,7 @@ def _execute_reorder(
         Stats dict (same shape as :func:`execute_diff`) plus ``reordered=True``
         so that :func:`execute_tree_sync` knows to skip child recursion.
     """
-    _NON_CREATABLE = ("child_database", "child_page")
+    _NON_CREATABLE = ("child_database", "child_page", "meeting_notes")
     stats: dict[str, Any] = {
         "kept": 0, "updated": 0, "inserted": 0, "deleted": 0, "replaced": 0,
         "reordered": True,

@@ -58,6 +58,7 @@ from notion_sync.builders import (
     make_callout,
     make_quote,
     make_divider,
+    make_tab,
 )
 
 # Utils
@@ -103,6 +104,7 @@ __all__ = [
     "make_callout",
     "make_quote",
     "make_divider",
+    "make_tab",
     # Utils
     "get_notion_token",
     "extract_page_id",

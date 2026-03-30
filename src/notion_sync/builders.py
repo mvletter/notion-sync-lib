@@ -238,6 +238,41 @@ def make_divider() -> dict[str, Any]:
     }
 
 
+def make_tab(tabs: list[tuple[str, list[dict[str, Any]]]] | None = None) -> dict[str, Any]:
+    """Create a tab block with labeled tabs.
+
+    Each tab is a paragraph child where rich_text is the tab label
+    and children are the tab's content blocks.
+
+    Args:
+        tabs: List of (label, children) tuples. Each tuple creates one tab
+              where label is the tab title and children are the tab's content blocks.
+
+    Returns:
+        Tab block dictionary ready for Notion API.
+
+    Example:
+        >>> make_tab([("Tab 1", [make_paragraph("Content 1")]), ("Tab 2", [make_paragraph("Content 2")])])
+        {'type': 'tab', 'tab': {'children': [...]}}
+    """
+    block: dict[str, Any] = {
+        "type": "tab",
+        "tab": {}
+    }
+    if tabs:
+        block["tab"]["children"] = [
+            {
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": label}}],
+                    "children": children,
+                }
+            }
+            for label, children in tabs
+        ]
+    return block
+
+
 __all__ = [
     "make_paragraph",
     "make_heading",
@@ -249,4 +284,5 @@ __all__ = [
     "make_callout",
     "make_quote",
     "make_divider",
+    "make_tab",
 ]

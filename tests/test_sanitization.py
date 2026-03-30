@@ -854,3 +854,105 @@ class TestSanitizeForUpdate:
             "color": "default",
         })
         assert result["to_do"]["checked"] is True
+
+
+# ---------------------------------------------------------------------------
+# Tab (structure-only — skipped for UPDATE)
+# ---------------------------------------------------------------------------
+
+class TestTabSanitization:
+    """tab: in _STRUCTURE_ONLY_BLOCKS — skipped entirely for UPDATE.
+
+    tab: {} is an empty object. Content lives in paragraph children.
+    """
+
+    def test_tab_in_structure_only_blocks(self):
+        assert "tab" in _STRUCTURE_ONLY_BLOCKS
+
+    def test_recursive_diff_skips_tab(self):
+        """execute_recursive_diff: tab in _STRUCTURE_ONLY_BLOCKS → skipped."""
+        client = _make_mock_client()
+        ops = [_make_recursive_op("tab", {})]
+        stats = execute_recursive_diff(client, ops)
+        assert not client.update_block.called
+        assert stats["skipped"] == 1
+
+    def test_diff_skips_tab(self):
+        """execute_diff: tab in _STRUCTURE_ONLY_BLOCKS → skipped (kept count)."""
+        client = _make_mock_client()
+        ops = [_make_diff_op("tab", {})]
+        stats = execute_diff(client, ops, page_id="page-1")
+        assert not client.update_block.called
+        assert stats["kept"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Meeting notes (structure-only + non-creatable — fully read-only)
+# ---------------------------------------------------------------------------
+
+class TestMeetingNotesSanitization:
+    """meeting_notes: read-only block. Cannot create, update, or delete via API."""
+
+    def test_meeting_notes_in_structure_only_blocks(self):
+        assert "meeting_notes" in _STRUCTURE_ONLY_BLOCKS
+
+    def test_recursive_diff_skips_meeting_notes(self):
+        """execute_recursive_diff: meeting_notes → skipped."""
+        client = _make_mock_client()
+        ops = [_make_recursive_op("meeting_notes", {
+            "title": [{"type": "text", "text": {"content": "Team Sync"}}],
+            "status": "notes_ready",
+        })]
+        stats = execute_recursive_diff(client, ops)
+        assert not client.update_block.called
+        assert stats["skipped"] == 1
+
+    def test_diff_skips_meeting_notes(self):
+        """execute_diff: meeting_notes → skipped (kept count)."""
+        client = _make_mock_client()
+        ops = [_make_diff_op("meeting_notes", {
+            "title": [{"type": "text", "text": {"content": "Team Sync"}}],
+            "status": "notes_ready",
+        })]
+        stats = execute_diff(client, ops, page_id="page-1")
+        assert not client.update_block.called
+        assert stats["kept"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Text extraction for new block types
+# ---------------------------------------------------------------------------
+
+class TestExtractNewBlockTypes:
+    """Text extraction for tab and meeting_notes blocks."""
+
+    def test_tab_returns_type_identifier(self):
+        from notion_sync.extract import extract_block_text
+        block = {"type": "tab", "tab": {}}
+        assert extract_block_text(block) == "tab"
+
+    def test_meeting_notes_with_title(self):
+        from notion_sync.extract import extract_block_text
+        block = {
+            "type": "meeting_notes",
+            "meeting_notes": {
+                "title": [{"type": "text", "text": {"content": "Team Sync"}, "plain_text": "Team Sync"}],
+                "status": "notes_ready",
+            }
+        }
+        assert extract_block_text(block) == "meeting_notes:Team Sync"
+
+    def test_meeting_notes_without_title(self):
+        from notion_sync.extract import extract_block_text
+        block = {
+            "type": "meeting_notes",
+            "meeting_notes": {
+                "status": "transcription_in_progress",
+            }
+        }
+        assert extract_block_text(block) == "meeting_notes"
+
+    def test_meeting_notes_empty(self):
+        from notion_sync.extract import extract_block_text
+        block = {"type": "meeting_notes", "meeting_notes": {}}
+        assert extract_block_text(block) == "meeting_notes"

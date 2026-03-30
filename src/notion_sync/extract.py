@@ -165,7 +165,7 @@ def extract_block_text(block: dict) -> str:
         return f"link:{url}"
 
     # Structural blocks - return type identifier
-    if block_type in {"table_of_contents", "breadcrumb", "column_list"}:
+    if block_type in {"table_of_contents", "breadcrumb", "column_list", "tab"}:
         return block_type
 
     # Column blocks - include width_ratio if present
@@ -200,6 +200,14 @@ def extract_block_text(block: dict) -> str:
     if block_type == "link_to_page":
         page_id = block_data.get("page_id", block_data.get("database_id", ""))
         return f"link_to_page:{page_id}"
+
+    # Meeting notes (read-only block, renamed from transcription in API 2026-03-11)
+    if block_type == "meeting_notes":
+        title = block_data.get("title", [])
+        title_text = extract_rich_text(title)
+        if title_text:
+            return f"meeting_notes:{title_text}"
+        return "meeting_notes"
 
     # Unknown block type - log and return empty
     if block_type and block_type not in {"unsupported"}:
