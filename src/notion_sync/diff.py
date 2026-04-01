@@ -43,6 +43,11 @@ _STRUCTURE_ONLY_BLOCKS = frozenset([
     # NOTE: numbered_list_item is NOT here - list_start_index is stripped before patch
 ])
 
+# Block types that cannot be created, deleted, or re-added via the Notion API.
+# child_database / child_page: deleting would cause permanent data loss
+# meeting_notes: read-only structure block, cannot be created via API
+_NON_CREATABLE = frozenset({"child_database", "child_page", "meeting_notes"})
+
 
 def _is_synced_copy(block: dict[str, Any]) -> bool:
     """Check if a block is a synced copy (read-only reference to original).
@@ -807,7 +812,6 @@ def _execute_reorder(
         Stats dict (same shape as :func:`execute_diff`) plus ``reordered=True``
         so that :func:`execute_tree_sync` knows to skip child recursion.
     """
-    _NON_CREATABLE = ("child_database", "child_page", "meeting_notes")
     stats: dict[str, Any] = {
         "kept": 0, "updated": 0, "inserted": 0, "deleted": 0, "replaced": 0,
         "reordered": True,
@@ -832,50 +836,112 @@ def _execute_reorder(
         "re-inserting in correct order (%d ops)", page_id, len(ops)
     )
 
-    # Step 1: Delete all existing Notion blocks (KEEP, UPDATE, DELETE, REPLACE).
-    # Non-creatable blocks cannot be deleted via the API and must stay in place.
-    for op in ops:
-        block_id = op.get("notion_block_id")
-        if not block_id:
-            continue
-        notion_block = op.get("notion_block")
-        if notion_block and notion_block.get("type") in _NON_CREATABLE:
-            logger.debug("Preserving non-creatable %s during reorder", notion_block.get("type"))
-            continue
-        _delete_block_recursive(client, block_id)
+    # --- Marker block strategy for non-creatable blocks ---
+    # Detect if content needs to be inserted before NC blocks.
+    # NC blocks (child_page, child_database, meeting_notes) cannot be deleted
+    # or re-created, so they stay in place.  Without a marker, content would
+    # be appended after them (at the end of the page).
+    marker_block_id: str | None = None
 
-    # Step 2: Re-insert all non-deleted blocks in the desired order.
-    last_block_id: str | None = None
-    for op in ops:
-        if op["op"] == "DELETE":
-            stats["deleted"] += 1
-            continue  # Was deleted above; not re-inserted
+    # Check if any content ops come before NC ops in the desired order
+    first_nc_index = None
+    has_content_before_nc = False
+    for i, op in enumerate(ops):
+        local_type = (op.get("local_block") or {}).get("type")
+        if local_type in _NON_CREATABLE:
+            if first_nc_index is None:
+                first_nc_index = i
+        elif op["op"] != "DELETE" and first_nc_index is None:
+            has_content_before_nc = True
 
-        local_block = op.get("local_block")
-        if not local_block:
-            continue
+    if has_content_before_nc and first_nc_index is not None:
+        # Find the NC block's notion_block_id from ops
+        nc_op = ops[first_nc_index]
+        nc_notion_id = nc_op.get("notion_block_id")
 
-        if local_block.get("type") in _NON_CREATABLE:
-            logger.debug(
-                "Skipping re-insert of non-creatable %s during reorder",
-                local_block.get("type")
+        if nc_notion_id:
+            # Get current page children to find the block before the first NC block
+            current_children = client.get_blocks(page_id)
+            prev_block_id = None
+            for child in current_children:
+                if child["id"] == nc_notion_id:
+                    break
+                prev_block_id = child["id"]
+
+            if prev_block_id is not None:
+                # Insert marker divider before the first NC block
+                marker_result = client.append_blocks(
+                    page_id=page_id,
+                    blocks=[{"type": "divider", "divider": {}}],
+                    after=prev_block_id,
+                )
+                marker_block_id = marker_result["results"][0]["id"]
+                logger.info(
+                    "Inserted reorder marker block %s before non-creatable blocks on page %s",
+                    marker_block_id, page_id,
+                )
+            else:
+                # NC blocks are already at the top — graceful degradation
+                logger.info(
+                    "Non-creatable blocks already at top of page %s, skipping marker",
+                    page_id,
+                )
+
+    try:
+        # Step 1: Delete all existing Notion blocks (KEEP, UPDATE, DELETE, REPLACE).
+        # Non-creatable blocks cannot be deleted via the API and must stay in place.
+        for op in ops:
+            block_id = op.get("notion_block_id")
+            if not block_id:
+                continue
+            if block_id == marker_block_id:
+                continue  # Protect marker block during deletion
+            notion_block = op.get("notion_block")
+            if notion_block and notion_block.get("type") in _NON_CREATABLE:
+                logger.debug("Preserving non-creatable %s during reorder", notion_block.get("type"))
+                continue
+            _delete_block_recursive(client, block_id)
+
+        # Step 2: Re-insert all non-deleted blocks in the desired order.
+        last_block_id: str | None = marker_block_id  # Use marker as insertion anchor
+        for op in ops:
+            if op["op"] == "DELETE":
+                stats["deleted"] += 1
+                continue  # Was deleted above; not re-inserted
+
+            local_block = op.get("local_block")
+            if not local_block:
+                continue
+
+            if local_block.get("type") in _NON_CREATABLE:
+                logger.debug(
+                    "Skipping re-insert of non-creatable %s during reorder",
+                    local_block.get("type")
+                )
+                continue
+
+            block_to_insert = _prepare_block_for_api(local_block, notion_token=notion_token)
+            result = client.append_blocks(
+                page_id=page_id, blocks=[block_to_insert], after=last_block_id
             )
-            continue
+            last_block_id = result["results"][0]["id"]
 
-        block_to_insert = _prepare_block_for_api(local_block, notion_token=notion_token)
-        result = client.append_blocks(
-            page_id=page_id, blocks=[block_to_insert], after=last_block_id
-        )
-        last_block_id = result["results"][0]["id"]
-
-        if op["op"] == "KEEP":
-            stats["kept"] += 1
-        elif op["op"] == "UPDATE":
-            stats["updated"] += 1
-        elif op["op"] == "INSERT":
-            stats["inserted"] += 1
-        elif op["op"] == "REPLACE":
-            stats["replaced"] += 1
+            if op["op"] == "KEEP":
+                stats["kept"] += 1
+            elif op["op"] == "UPDATE":
+                stats["updated"] += 1
+            elif op["op"] == "INSERT":
+                stats["inserted"] += 1
+            elif op["op"] == "REPLACE":
+                stats["replaced"] += 1
+    finally:
+        # Step 3: Clean up marker block
+        if marker_block_id:
+            try:
+                client.delete_block(marker_block_id)
+                logger.info("Removed reorder marker block %s", marker_block_id)
+            except Exception as e:
+                logger.warning("Failed to remove reorder marker: %s", e)
 
     return stats
 
@@ -972,11 +1038,10 @@ def execute_diff(
                     stats["updated"] += 1
 
             elif op["op"] == "DELETE":
-                # Never delete non-creatable blocks (child_database, child_page).
-                # These cannot be re-added via the blocks API, so removing them
-                # would cause permanent data loss (e.g. Related Pages widget).
-                # Consistent with INSERT/REPLACE which also skip these types.
-                if notion_block and notion_block.get("type") in ("child_database", "child_page"):
+                # Never delete non-creatable blocks — they cannot be re-added via
+                # the blocks API, so removing them would cause permanent data loss
+                # (e.g. Related Pages widget).  See module-level _NON_CREATABLE.
+                if notion_block and notion_block.get("type") in _NON_CREATABLE:
                     logger.debug(
                         "Preserving non-creatable %s block at index %d",
                         notion_block.get("type"),
@@ -990,8 +1055,8 @@ def execute_diff(
                     stats["deleted"] += 1
 
             elif op["op"] == "INSERT":
-                # Skip child_database and child_page blocks - cannot be added via blocks API
-                if op["local_block"].get("type") in ("child_database", "child_page"):
+                # Skip non-creatable blocks — cannot be added via blocks API
+                if op["local_block"].get("type") in _NON_CREATABLE:
                     logger.info(
                         "Skipping INSERT of %s block at index %d",
                         op["local_block"]["type"], op["index"],
@@ -1009,8 +1074,8 @@ def execute_diff(
                 stats["inserted"] += 1
 
             elif op["op"] == "REPLACE":
-                # Skip child_database and child_page blocks - cannot be added via blocks API
-                if op["local_block"].get("type") in ("child_database", "child_page"):
+                # Skip non-creatable blocks — cannot be added via blocks API
+                if op["local_block"].get("type") in _NON_CREATABLE:
                     logger.info(
                         "Skipping REPLACE of %s block at index %d",
                         op["local_block"]["type"], op["index"],
@@ -1147,8 +1212,8 @@ def _prepare_block_for_api(
             prepared_children = []
             for child in children:
                 child_type = child.get("type")
-                # Skip child_database and child_page - cannot be added via blocks API
-                if child_type in ("child_database", "child_page"):
+                # Skip non-creatable blocks — cannot be added via blocks API
+                if child_type in _NON_CREATABLE:
                     logger.debug(
                         "Skipping %s block: cannot be added via blocks.children.append",
                         child_type,
