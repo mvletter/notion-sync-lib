@@ -894,8 +894,6 @@ def _execute_reorder(
             block_id = op.get("notion_block_id")
             if not block_id:
                 continue
-            if block_id == marker_block_id:
-                continue  # Protect marker block during deletion
             notion_block = op.get("notion_block")
             if notion_block and notion_block.get("type") in _NON_CREATABLE:
                 logger.debug("Preserving non-creatable %s during reorder", notion_block.get("type"))
