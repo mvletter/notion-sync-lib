@@ -1217,13 +1217,19 @@ def _prepare_block_for_api(
                         child_type,
                     )
                     continue
-                # Skip column_list as an inline child — Notion API rejects column_list
-                # nested inside another block's children array. column_list must always
-                # be a top-level block created via a separate append call.
-                if child_type == "column_list" and _depth >= 1:
+                # Skip column_list as an inline child at ANY depth — Notion API rejects
+                # column_list nested inside another block's children array. It must always
+                # be appended via a separate blocks.children.append call.
+                # NOTE: the original `_depth >= 1` guard was wrong: when a heading_2
+                # (at _depth=0) has a column_list child, _depth is 0 so the guard was
+                # False and column_list leaked into the creation payload, causing:
+                #   "body.children[0].heading_2.children[3].embed should be defined"
+                # The post-sync pass in execute_tree_sync handles these stripped children.
+                if child_type == "column_list":
                     logger.debug(
-                        f"Skipping column_list at inline depth {_depth}: must be created "
-                        f"as a top-level block via separate append (Notion API restriction)"
+                        "Skipping column_list child of %s at depth %d: "
+                        "must be appended separately (Notion API restriction)",
+                        block_type, _depth,
                     )
                     continue
                 prepared_children.append(
