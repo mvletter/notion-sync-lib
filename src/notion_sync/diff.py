@@ -1244,6 +1244,18 @@ def _prepare_block_for_api(
             # Only add children if we have any after filtering
             if prepared_children:
                 cleaned[block_type]["children"] = prepared_children
+            elif block_type == "column":
+                # Notion requires at least one child block per column.
+                # If all children were filtered out (e.g. all were unsupported
+                # blocks like "button"), insert an empty paragraph placeholder
+                # so the column_list structure remains valid for the API.
+                logger.debug(
+                    "All children of column filtered out (likely unsupported block types); "
+                    "inserting empty paragraph placeholder to satisfy Notion API"
+                )
+                cleaned[block_type]["children"] = [
+                    {"type": "paragraph", "paragraph": {"rich_text": []}}
+                ]
     elif children and _depth >= 2:
         logger.debug(
             "Stripping children from %s block at inline depth %d "
