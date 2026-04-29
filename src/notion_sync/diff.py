@@ -43,10 +43,15 @@ _STRUCTURE_ONLY_BLOCKS = frozenset([
     # NOTE: numbered_list_item is NOT here - list_start_index is stripped before patch
 ])
 
-# Block types that cannot be created, deleted, or re-added via the Notion API.
+# Block types that cannot be created or re-added via the Notion API.
 # child_database / child_page: deleting would cause permanent data loss
 # meeting_notes: read-only structure block, cannot be created via API
-_NON_CREATABLE = frozenset({"child_database", "child_page", "meeting_notes"})
+# unsupported: Notion returns this type for block types the API doesn't expose
+#   (e.g. "button"). They are read-only from the API perspective — we cannot
+#   create, update, or re-insert them. Passing them in a blocks.children array
+#   causes a Notion validation error ("should be defined, instead was undefined")
+#   because the API does not know the "unsupported" type.
+_NON_CREATABLE = frozenset({"child_database", "child_page", "meeting_notes", "unsupported"})
 
 
 def _is_synced_copy(block: dict[str, Any]) -> bool:
