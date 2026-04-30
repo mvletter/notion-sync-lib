@@ -1036,9 +1036,29 @@ def execute_diff(
                     block_type = op["local_block"]["type"]
                     block_content = op["local_block"][block_type]
                     update_data = _sanitize_for_update(block_type, block_content)
-                    client.update_block(block_id=op["notion_block_id"], data=update_data)
-                    last_block_id = op["notion_block_id"]
-                    stats["updated"] += 1
+                    try:
+                        client.update_block(block_id=op["notion_block_id"], data=update_data)
+                        last_block_id = op["notion_block_id"]
+                        stats["updated"] += 1
+                    except Exception as update_err:
+                        err_str = str(update_err)
+                        if "Cannot remove toggle" in err_str and "remove its children first" in err_str:
+                            logger.warning(
+                                "UPDATE at index %d failed with toggle-children error; "
+                                "falling back to REPLACE (delete + reinsert): %s",
+                                op["index"], update_err,
+                            )
+                            _delete_block_recursive(client, op["notion_block_id"])
+                            blocks_to_insert = [
+                                _prepare_block_for_api(op["local_block"], notion_token=notion_token)
+                            ]
+                            result = client.append_blocks(
+                                page_id=page_id, blocks=blocks_to_insert, after=last_block_id,
+                            )
+                            last_block_id = result["results"][0]["id"]
+                            stats["replaced"] = stats.get("replaced", 0) + 1
+                        else:
+                            raise
 
             elif op["op"] == "DELETE":
                 # Never delete non-creatable blocks — they cannot be re-added via
