@@ -99,6 +99,15 @@ def chunk_block_payload(
             for key in _RICH_TEXT_KEYS:
                 if isinstance(new_content.get(key), list):
                     new_content[key] = chunk_rich_text(new_content[key], limit, max_elements)
+            # table_row payloads carry a list of rich_text arrays under "cells".
+            # Cells read back from Notion can exceed the write limit too (e.g. a
+            # partial-cell patch that re-sends untouched cells verbatim).
+            if isinstance(new_content.get("cells"), list):
+                new_content["cells"] = [
+                    chunk_rich_text(cell, limit, max_elements)
+                    if isinstance(cell, list) else cell
+                    for cell in new_content["cells"]
+                ]
             result[block_type] = new_content
         else:
             result[block_type] = content

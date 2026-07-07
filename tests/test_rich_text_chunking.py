@@ -104,3 +104,27 @@ def test_chunk_block_payload_does_not_mutate_input():
 def test_chunk_block_payload_ignores_non_rich_text():
     payload = {"table": {"table_width": 3}}
     assert chunk_block_payload(payload) == payload
+
+
+def test_chunk_block_payload_table_row_cells():
+    """table_row cells (list of rich_text arrays) must be chunked per cell.
+
+    Regression: partial-cell patches re-send untouched cells read back from
+    Notion verbatim — those can exceed the write limit just like rich_text.
+    """
+    payload = {
+        "table_row": {
+            "cells": [
+                [_text_el("short")],
+                [_text_el("f" * 2500)],
+                [],  # empty cell passes through
+            ]
+        }
+    }
+    out = chunk_block_payload(payload)
+    cells = out["table_row"]["cells"]
+    assert len(cells) == 3  # cell COUNT unchanged (must match table width)
+    assert len(cells[0]) == 1
+    assert len(cells[1]) == 2  # long cell split into 2 elements
+    assert all(len(el["text"]["content"]) <= 2000 for el in cells[1])
+    assert cells[2] == []
