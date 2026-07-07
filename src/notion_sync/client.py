@@ -7,6 +7,7 @@ from typing import Any
 from notion_client import APIResponseError, Client
 from notion_client.errors import HTTPResponseError
 
+from notion_sync.rich_text import chunk_block_payload
 from notion_sync.utils import get_notion_token
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,11 @@ class RateLimitedNotionClient:
             APIResponseError: On API errors after retries exhausted.
             Exception: If all retries fail.
         """
+        # Universal safety net: chunk any over-long rich_text/caption so writes
+        # never hit Notion's 2000-char-per-element limit. This is the single
+        # choke point for ALL updates, including verbatim copies of fetched
+        # master blocks (e.g. code/equation sync) that bypass _sanitize_for_update.
+        data = chunk_block_payload(data)
         return self._execute_with_retry(
             f"update block {block_id}",
             self.notion.blocks.update, block_id=block_id, **data,
