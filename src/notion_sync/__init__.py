@@ -64,6 +64,14 @@ from notion_sync.builders import (
 # Utils
 from notion_sync.utils import get_notion_token, extract_page_id, extract_page_title, extract_page_icon, prepare_icon_for_api
 
+# rich_text
+from notion_sync.rich_text import (
+    chunk_rich_text,
+    chunk_block_payload,
+    RICH_TEXT_CONTENT_LIMIT,
+    RICH_TEXT_MAX_ELEMENTS,
+)
+
 __all__ = [
     # Client
     "get_notion_client",
@@ -111,4 +119,9 @@ __all__ = [
     "extract_page_title",
     "extract_page_icon",
     "prepare_icon_for_api",
+    # rich_text
+    "chunk_rich_text",
+    "chunk_block_payload",
+    "RICH_TEXT_CONTENT_LIMIT",
+    "RICH_TEXT_MAX_ELEMENTS",
 ]

@@ -6,6 +6,8 @@ These are especially useful for testing and creating content programmatically.
 
 from typing import Any
 
+from notion_sync.rich_text import chunk_rich_text
+
 
 def make_paragraph(text: str) -> dict[str, Any]:
     """Create a paragraph block.
@@ -172,7 +174,9 @@ def make_code(code: str, language: str = "python") -> dict[str, Any]:
     return {
         "type": "code",
         "code": {
-            "rich_text": [{"type": "text", "text": {"content": code}}],
+            # Code blocks routinely exceed Notion's 2000-char per-element limit;
+            # chunk so the created block writes cleanly.
+            "rich_text": chunk_rich_text([{"type": "text", "text": {"content": code}}]),
             "language": language
         }
     }
