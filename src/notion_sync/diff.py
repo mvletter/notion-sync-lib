@@ -53,6 +53,16 @@ _STRUCTURE_ONLY_BLOCKS = frozenset([
 #   because the API does not know the "unsupported" type.
 _NON_CREATABLE = frozenset({"child_database", "child_page", "meeting_notes", "unsupported"})
 
+# Block types with a writable `color` property whose value must feed the content
+# hash (SPEC-BLOCK-STYLE-001-M3). Without this, a master-side style-only edit
+# (color change) produces an identical hash — change detection never surfaces it
+# and the slave silently keeps its old color. `callout` is handled separately in
+# create_content_hash because it additionally hashes its `icon`.
+_COLOR_BEARING_TYPES = frozenset({
+    "paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "quote", "toggle", "to_do",
+})
+
 
 def _is_synced_copy(block: dict[str, Any]) -> bool:
     """Check if a block is a synced copy (read-only reference to original).
@@ -222,6 +232,39 @@ def create_content_hash(block: dict[str, Any]) -> str:
         width_ratio = type_data.get("width_ratio")
         if width_ratio is not None:
             extras = f":width={width_ratio}"
+
+    # SPEC-BLOCK-STYLE-001-M3: fold `color` (all color-bearing types) and the
+    # callout `icon` into the hash so a master-side style-only edit is detected.
+    # A "default" color is omitted so unstyled blocks keep their pre-M3 hash
+    # (avoids a phantom-diff flood on rebaseline for the common case).
+    if block_type in _COLOR_BEARING_TYPES:
+        color = block.get(block_type, {}).get("color", "default")
+        if color != "default":
+            extras += f":color={color}"
+    elif block_type == "callout":
+        callout_data = block.get(block_type, {})
+        color = callout_data.get("color", "default")
+        if color != "default":
+            extras += f":color={color}"
+        icon = callout_data.get("icon")
+        if isinstance(icon, dict):
+            icon_type = icon.get("type")
+            if icon_type == "emoji":
+                icon_value = icon.get("emoji")
+            elif icon_type == "external":
+                icon_value = (icon.get("external") or {}).get("url")
+            elif icon_type == "custom_emoji":
+                icon_value = (icon.get("custom_emoji") or {}).get("id")
+            elif icon_type == "file_upload":
+                icon_value = (icon.get("file_upload") or {}).get("id")
+            else:
+                # 'file'-type icons carry only an expiring S3 URL (no stable id).
+                # Deliberately NOT hashed — it would make the hash volatile on
+                # every re-fetch (same rationale as extractor.py's
+                # _VOLATILE_BLOCK_KEYS). A file->emoji swap or icon add/remove is
+                # still caught via icon_type; a file->different-file swap is not.
+                icon_value = None
+            extras += f":icon={icon_type}:{icon_value}"
 
     # Create normalized string and hash
     normalized = f"{block_type}:{text}{extras}"
