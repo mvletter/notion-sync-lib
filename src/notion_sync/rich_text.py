@@ -112,3 +112,48 @@ def chunk_block_payload(
         else:
             result[block_type] = content
     return result
+
+
+def chunk_children_blocks(
+    blocks: list[dict] | None,
+    limit: int = RICH_TEXT_CONTENT_LIMIT,
+    max_elements: int = RICH_TEXT_MAX_ELEMENTS,
+) -> list[dict] | None:
+    """Chunk over-long rich_text in a list of full block dicts (CREATE/append shape).
+
+    ``blocks.children.append`` payloads are full block objects
+    (``{"type": "code", "code": {...}, "children": [...]}``) rather than the
+    ``{block_type: {...}}`` shape ``chunk_block_payload`` expects. This walks each
+    block, chunks the rich_text/caption/cells inside its type object, and recurses
+    into nested ``children`` arrays — both the top-level ``children`` key and any
+    ``children`` nested inside a type object (columns, toggles, tables, etc.).
+
+    Used as the universal safety net in ``append_blocks`` so verbatim copies of
+    fetched master content (e.g. a >2000-char code block on new-page creation)
+    write cleanly. Returns new lists/dicts; the input is not mutated.
+    """
+    if not isinstance(blocks, list):
+        return blocks
+    return [_chunk_block(block, limit, max_elements) for block in blocks]
+
+
+def _chunk_block(block: Any, limit: int, max_elements: int) -> Any:
+    """Chunk one full block dict, recursing into nested children."""
+    if not isinstance(block, dict):
+        return block
+
+    # Reuse the update-path net to chunk rich_text/caption/cells in every type
+    # object (dict-valued key). Returns a shallow copy; input is not mutated.
+    result = chunk_block_payload(block, limit, max_elements)
+
+    # Recurse into nested children wherever they live: the block's top-level
+    # "children" key, and "children" nested inside a type object (column,
+    # toggle, table, ...). chunk_block_payload copies the type-object dicts but
+    # leaves their "children" list refs shared, so reassign rather than mutate.
+    for key, value in result.items():
+        if key == "children" and isinstance(value, list):
+            result[key] = chunk_children_blocks(value, limit, max_elements)
+        elif isinstance(value, dict) and isinstance(value.get("children"), list):
+            value["children"] = chunk_children_blocks(value["children"], limit, max_elements)
+
+    return result

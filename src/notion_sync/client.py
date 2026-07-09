@@ -7,7 +7,7 @@ from typing import Any
 from notion_client import APIResponseError, Client
 from notion_client.errors import HTTPResponseError
 
-from notion_sync.rich_text import chunk_block_payload
+from notion_sync.rich_text import chunk_block_payload, chunk_children_blocks
 from notion_sync.utils import get_notion_token
 
 logger = logging.getLogger(__name__)
@@ -160,6 +160,12 @@ class RateLimitedNotionClient:
             APIResponseError: On API errors after retries exhausted.
             Exception: If all retries fail.
         """
+        # Universal safety net: chunk any over-long rich_text/caption/cells in the
+        # block tree (including nested children) so appends never hit Notion's
+        # 2000-char-per-element limit. Mirrors update_block's choke point — covers
+        # verbatim copies of fetched master blocks (e.g. a >2000-char code block on
+        # new-page creation) that would otherwise 400.
+        blocks = chunk_children_blocks(blocks)
         kwargs: dict[str, Any] = {"block_id": page_id, "children": blocks}
         if after:
             kwargs["after"] = after

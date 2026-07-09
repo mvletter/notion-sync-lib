@@ -3,6 +3,7 @@
 from notion_sync.rich_text import (
     RICH_TEXT_CONTENT_LIMIT,
     chunk_block_payload,
+    chunk_children_blocks,
     chunk_rich_text,
 )
 
@@ -128,3 +129,78 @@ def test_chunk_block_payload_table_row_cells():
     assert len(cells[1]) == 2  # long cell split into 2 elements
     assert all(len(el["text"]["content"]) <= 2000 for el in cells[1])
     assert cells[2] == []
+
+
+# --- chunk_children_blocks (CREATE/append path) --------------------------------
+
+
+def _block(block_type, content, children=None):
+    b = {"type": block_type, block_type: content}
+    if children is not None:
+        b["children"] = children
+    return b
+
+
+def test_chunk_children_blocks_code_and_nested_paragraph():
+    """Acceptance: a >2000-char code block with a >2000-char nested child
+    paragraph chunks BOTH, without altering block structure."""
+    tree = [
+        _block(
+            "code",
+            {"rich_text": [_text_el("a" * 2105)], "language": "python"},
+            children=[_block("paragraph", {"rich_text": [_text_el("b" * 2105)]})],
+        )
+    ]
+    out = chunk_children_blocks(tree)
+
+    # Structure intact: one top-level block, still code, still one child.
+    assert len(out) == 1
+    assert out[0]["type"] == "code"
+    assert out[0]["code"]["language"] == "python"
+    assert len(out[0]["children"]) == 1
+    assert out[0]["children"][0]["type"] == "paragraph"
+
+    # Both over-long elements chunked to <=2000, losslessly.
+    code_rt = out[0]["code"]["rich_text"]
+    assert len(code_rt) == 2
+    assert "".join(e["text"]["content"] for e in code_rt) == "a" * 2105
+
+    para_rt = out[0]["children"][0]["paragraph"]["rich_text"]
+    assert len(para_rt) == 2
+    assert "".join(e["text"]["content"] for e in para_rt) == "b" * 2105
+
+
+def test_chunk_children_blocks_nested_children_inside_type_object():
+    """Some blocks (column, toggle) carry children INSIDE the type object."""
+    tree = [
+        {
+            "type": "column",
+            "column": {
+                "children": [_block("code", {"rich_text": [_text_el("c" * 2500)]})]
+            },
+        }
+    ]
+    out = chunk_children_blocks(tree)
+    inner_rt = out[0]["column"]["children"][0]["code"]["rich_text"]
+    assert len(inner_rt) == 2
+
+
+def test_chunk_children_blocks_all_short_unchanged():
+    """Regression: normal (all-short) content is untouched — element counts stable."""
+    tree = [
+        _block("paragraph", {"rich_text": [_text_el("hi")]}),
+        _block("heading_1", {"rich_text": [_text_el("title")], "color": "blue"}),
+    ]
+    out = chunk_children_blocks(tree)
+    assert out == tree
+
+
+def test_chunk_children_blocks_does_not_mutate_input():
+    tree = [_block("code", {"rich_text": [_text_el("d" * 3000)]})]
+    chunk_children_blocks(tree)
+    assert len(tree[0]["code"]["rich_text"]) == 1  # input untouched
+
+
+def test_chunk_children_blocks_none_and_empty():
+    assert chunk_children_blocks(None) is None
+    assert chunk_children_blocks([]) == []
