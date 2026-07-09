@@ -68,6 +68,7 @@ from notion_sync.utils import get_notion_token, extract_page_id, extract_page_ti
 from notion_sync.rich_text import (
     chunk_rich_text,
     chunk_block_payload,
+    chunk_children_blocks,
     RICH_TEXT_CONTENT_LIMIT,
     RICH_TEXT_MAX_ELEMENTS,
 )
@@ -122,6 +123,7 @@ __all__ = [
     # rich_text
     "chunk_rich_text",
     "chunk_block_payload",
+    "chunk_children_blocks",
     "RICH_TEXT_CONTENT_LIMIT",
     "RICH_TEXT_MAX_ELEMENTS",
 ]
