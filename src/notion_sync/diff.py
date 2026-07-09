@@ -74,6 +74,43 @@ def _is_synced_copy(block: dict[str, Any]) -> bool:
     return synced_from is not None
 
 
+def _prepare_callout_icon_for_update(
+    block_content: dict, notion_token: str | None = None
+) -> dict:
+    """Return a callout content dict with a write-safe icon for the UPDATE path.
+
+    A callout icon read from Notion may be a 'file'-type icon backed by an
+    expiring S3 URL — passing it straight into an UPDATE PATCH sends a dead URL.
+    Mirrors the INSERT path (`_prepare_block_for_api`, callout branch): re-upload
+    'file'-type icons via `prepare_icon_for_api` (permanent file_upload.id when a
+    token is available, external-URL fallback otherwise), and leave already
+    write-compatible icons (emoji/external/custom_emoji/file_upload) untouched.
+
+    The input dict is never mutated. Returns the original object unchanged when no
+    conversion is needed (no icon, or a non-'file' icon), so callers can pass the
+    result straight to `_sanitize_for_update`.
+
+    Args:
+        block_content: The callout's content dict (e.g. block["callout"]).
+        notion_token: Optional Notion token for re-uploading 'file'-type icons.
+
+    Returns:
+        The original dict, or a shallow copy with `icon` converted/dropped.
+    """
+    icon = block_content.get("icon")
+    if not isinstance(icon, dict) or icon.get("type") != "file":
+        return block_content
+
+    converted = dict(block_content)
+    fixed_icon = prepare_icon_for_api(icon, notion_token=notion_token)
+    if fixed_icon:
+        converted["icon"] = fixed_icon
+    else:
+        converted.pop("icon", None)
+        logger.warning("Dropped callout icon on UPDATE: could not convert 'file' type")
+    return converted
+
+
 def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
     """Sanitize block content for Notion UPDATE API.
 
@@ -106,6 +143,23 @@ def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
                 restricted["is_toggleable"] = block_content["is_toggleable"]
             if "color" in block_content:
                 restricted["color"] = block_content["color"]
+        elif block_type == "toggle":
+            # SPEC-BLOCK-STYLE-001-M2: toggle color was silently dropped here —
+            # it fell through the restricted branch without color being re-added,
+            # so a master-side color change never reached the slave.
+            if "color" in block_content:
+                restricted["color"] = block_content["color"]
+        elif block_type == "callout":
+            # SPEC-BLOCK-STYLE-001-M2: callout color AND icon were both dropped.
+            # `icon` here must already be write-safe (emoji/external/custom_emoji,
+            # or a re-uploaded file_upload) — a 'file'-type icon carries an
+            # expiring S3 URL and must be pre-converted by the caller via
+            # `_prepare_callout_icon_for_update` before reaching this function
+            # (this stays a pure dict-shaper with no I/O, R2.2).
+            if "color" in block_content:
+                restricted["color"] = block_content["color"]
+            if block_content.get("icon"):
+                restricted["icon"] = block_content["icon"]
         return {block_type: restricted}
 
     if block_type in _FILE_BASED_BLOCKS:
@@ -423,6 +477,7 @@ def execute_recursive_diff(
     client: RateLimitedNotionClient,
     ops: list[dict[str, Any]],
     dry_run: bool = False,
+    notion_token: str | None = None,
 ) -> dict[str, int]:
     """Execute recursive diff operations (UPDATE only).
 
@@ -437,6 +492,10 @@ def execute_recursive_diff(
         client: RateLimitedNotionClient instance for API calls.
         ops: List of UPDATE operations from generate_recursive_diff.
         dry_run: If True, only count operations without executing.
+        notion_token: Optional Notion token. When provided, a callout block's
+            'file'-type icon is re-uploaded to a permanent file_upload before
+            the UPDATE (SPEC-BLOCK-STYLE-001-M2). Without it, a 'file' icon
+            falls back to its expiring external URL.
 
     Returns:
         Stats dict with counts: {updated, skipped}
@@ -497,6 +556,10 @@ def execute_recursive_diff(
                 continue
 
             block_content = local_block[local_type]
+            if local_type == "callout":
+                block_content = _prepare_callout_icon_for_update(
+                    block_content, notion_token=notion_token
+                )
             update_data = _sanitize_for_update(local_type, block_content)
 
             client.update_block(block_id=block_id, data=update_data)
@@ -1035,6 +1098,10 @@ def execute_diff(
                 else:
                     block_type = op["local_block"]["type"]
                     block_content = op["local_block"][block_type]
+                    if block_type == "callout":
+                        block_content = _prepare_callout_icon_for_update(
+                            block_content, notion_token=notion_token
+                        )
                     update_data = _sanitize_for_update(block_type, block_content)
                     try:
                         client.update_block(block_id=op["notion_block_id"], data=update_data)

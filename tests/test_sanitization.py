@@ -17,6 +17,7 @@ from notion_sync.diff import (
     execute_recursive_diff,
     execute_diff,
     _sanitize_for_update,
+    _prepare_callout_icon_for_update,
     _RICH_TEXT_ONLY_BLOCKS,
     _FILE_BASED_BLOCKS,
     _STRUCTURE_ONLY_BLOCKS,
@@ -208,10 +209,15 @@ class TestHeadingSanitization:
 # ---------------------------------------------------------------------------
 
 class TestCalloutSanitization:
-    """Callout is in _RICH_TEXT_ONLY_BLOCKS — only rich_text sent."""
+    """Callout is in _RICH_TEXT_ONLY_BLOCKS — rich_text + color + icon sent.
 
-    def test_recursive_diff_callout_rich_text_only(self):
-        """execute_recursive_diff: callout restricted to rich_text only."""
+    SPEC-BLOCK-STYLE-001-M2: previously callout dropped both color and icon
+    (returned rich_text only). These tests assert the corrected behavior: an
+    emoji/external icon and color survive the UPDATE, and children are stripped.
+    """
+
+    def test_recursive_diff_callout_keeps_color_and_icon(self):
+        """execute_recursive_diff: callout keeps color + emoji icon, strips children."""
         client = _make_mock_client()
         ops = [_make_recursive_op("callout", {
             "rich_text": [{"type": "text", "text": {"content": "note"}}],
@@ -223,13 +229,12 @@ class TestCalloutSanitization:
         data = _get_update_data(client)
         assert "callout" in data
         assert "rich_text" in data["callout"]
-        # Callout is NOT a heading, so no is_toggleable/color added
-        assert "icon" not in data["callout"]
-        assert "color" not in data["callout"]
+        assert data["callout"]["icon"] == {"type": "emoji", "emoji": "💡"}
+        assert data["callout"]["color"] == "yellow_background"
         assert "children" not in data["callout"]
 
-    def test_diff_callout_rich_text_only(self):
-        """execute_diff: callout restricted to rich_text only."""
+    def test_diff_callout_keeps_color_and_icon(self):
+        """execute_diff: callout keeps color + emoji icon."""
         client = _make_mock_client()
         ops = [_make_diff_op("callout", {
             "rich_text": [{"type": "text", "text": {"content": "note"}}],
@@ -240,8 +245,42 @@ class TestCalloutSanitization:
         data = _get_update_data(client)
         assert "callout" in data
         assert "rich_text" in data["callout"]
+        assert data["callout"]["icon"] == {"type": "emoji", "emoji": "💡"}
+        assert data["callout"]["color"] == "yellow_background"
+
+    def test_diff_callout_file_icon_reuploaded(self):
+        """execute_diff with a token: a 'file'-type callout icon is re-uploaded
+        to a file_upload ref (expiring S3 URL never reaches the UPDATE)."""
+        client = _make_mock_client()
+        ops = [_make_diff_op("callout", {
+            "rich_text": [{"type": "text", "text": {"content": "note"}}],
+            "icon": {"type": "file", "file": {"url": "https://s3/expiring?x=1"}},
+            "color": "blue_background",
+        })]
+        with patch(
+            "notion_sync.diff.prepare_icon_for_api",
+            return_value={"type": "file_upload", "file_upload": {"id": "up-123"}},
+        ) as mock_prep:
+            execute_diff(client, ops, page_id="page-1", notion_token="tok")
+        mock_prep.assert_called_once()
+        data = _get_update_data(client)
+        assert data["callout"]["icon"] == {"type": "file_upload", "file_upload": {"id": "up-123"}}
+        assert data["callout"]["color"] == "blue_background"
+
+    def test_diff_callout_file_icon_conversion_fails_drops_icon(self):
+        """execute_diff: if a 'file' icon cannot be converted, the icon is dropped
+        rather than sending a dead S3 URL — color still survives."""
+        client = _make_mock_client()
+        ops = [_make_diff_op("callout", {
+            "rich_text": [{"type": "text", "text": {"content": "note"}}],
+            "icon": {"type": "file", "file": {"url": "https://s3/expiring?x=1"}},
+            "color": "blue_background",
+        })]
+        with patch("notion_sync.diff.prepare_icon_for_api", return_value=None):
+            execute_diff(client, ops, page_id="page-1", notion_token="tok")
+        data = _get_update_data(client)
         assert "icon" not in data["callout"]
-        assert "color" not in data["callout"]
+        assert data["callout"]["color"] == "blue_background"
 
 
 # ---------------------------------------------------------------------------
@@ -249,28 +288,38 @@ class TestCalloutSanitization:
 # ---------------------------------------------------------------------------
 
 class TestToggleSanitization:
-    """Toggle is in _RICH_TEXT_ONLY_BLOCKS — only rich_text sent."""
+    """Toggle is in _RICH_TEXT_ONLY_BLOCKS — rich_text + color sent.
 
-    def test_recursive_diff_toggle_rich_text_only(self):
+    SPEC-BLOCK-STYLE-001-M2: previously toggle dropped color. Now it survives
+    (children are still stripped — a toggle can't be updated with its children).
+    """
+
+    def test_recursive_diff_toggle_keeps_color(self):
         client = _make_mock_client()
         ops = [_make_recursive_op("toggle", {
             "rich_text": [{"type": "text", "text": {"content": "toggle"}}],
-            "color": "default",
+            "color": "red",
             "children": [{"type": "paragraph"}],
         })]
         execute_recursive_diff(client, ops)
         data = _get_update_data(client)
-        assert data == {"toggle": {"rich_text": [{"type": "text", "text": {"content": "toggle"}}]}}
+        assert data == {"toggle": {
+            "rich_text": [{"type": "text", "text": {"content": "toggle"}}],
+            "color": "red",
+        }}
 
-    def test_diff_toggle_rich_text_only(self):
+    def test_diff_toggle_keeps_color(self):
         client = _make_mock_client()
         ops = [_make_diff_op("toggle", {
             "rich_text": [{"type": "text", "text": {"content": "toggle"}}],
-            "color": "default",
+            "color": "red",
         })]
         execute_diff(client, ops, page_id="page-1")
         data = _get_update_data(client)
-        assert data == {"toggle": {"rich_text": [{"type": "text", "text": {"content": "toggle"}}]}}
+        assert data == {"toggle": {
+            "rich_text": [{"type": "text", "text": {"content": "toggle"}}],
+            "color": "red",
+        }}
 
 
 # ---------------------------------------------------------------------------
@@ -736,24 +785,39 @@ class TestSanitizeForUpdate:
         assert result == {"heading_2": {"rich_text": []}}
         assert "is_toggleable" not in result["heading_2"]
 
-    def test_callout_rich_text_only(self):
+    def test_callout_keeps_color_and_icon(self):
+        """SPEC-BLOCK-STYLE-001-M2: callout keeps color + (write-safe) icon."""
         result = _sanitize_for_update("callout", {
             "rich_text": [{"type": "text", "text": {"content": "note"}}],
             "icon": {"type": "emoji", "emoji": "💡"},
             "color": "yellow_background",
+            "children": [{"type": "paragraph"}],
         })
         assert result == {"callout": {
             "rich_text": [{"type": "text", "text": {"content": "note"}}],
+            "color": "yellow_background",
+            "icon": {"type": "emoji", "emoji": "💡"},
         }}
 
-    def test_toggle_rich_text_only(self):
+    def test_callout_null_icon_omitted(self):
+        """A null/absent callout icon is not sent (avoids icon:null on write)."""
+        result = _sanitize_for_update("callout", {
+            "rich_text": [],
+            "icon": None,
+            "color": "gray_background",
+        })
+        assert result == {"callout": {"rich_text": [], "color": "gray_background"}}
+
+    def test_toggle_keeps_color(self):
+        """SPEC-BLOCK-STYLE-001-M2: toggle keeps color, strips children."""
         result = _sanitize_for_update("toggle", {
             "rich_text": [{"type": "text", "text": {"content": "toggle"}}],
-            "color": "default",
+            "color": "red",
             "children": [{"type": "paragraph"}],
         })
         assert result == {"toggle": {
             "rich_text": [{"type": "text", "text": {"content": "toggle"}}],
+            "color": "red",
         }}
 
     @pytest.mark.parametrize("block_type", ["image", "video", "pdf", "file", "audio"])
@@ -834,6 +898,48 @@ class TestSanitizeForUpdate:
             "color": "default",
         })
         assert result["to_do"]["checked"] is True
+
+
+class TestPrepareCalloutIconForUpdate:
+    """SPEC-BLOCK-STYLE-001-M2: pre-convert a 'file'-type callout icon before
+    it reaches _sanitize_for_update (which is pure dict-shaping, no I/O)."""
+
+    def test_emoji_icon_passthrough_no_conversion(self):
+        """Emoji icons are already write-safe — returned unchanged, no I/O."""
+        content = {"rich_text": [], "icon": {"type": "emoji", "emoji": "🔥"}}
+        with patch("notion_sync.diff.prepare_icon_for_api") as mock_prep:
+            result = _prepare_callout_icon_for_update(content, notion_token="tok")
+        mock_prep.assert_not_called()
+        assert result is content  # same object, not copied
+
+    def test_no_icon_passthrough(self):
+        content = {"rich_text": [], "color": "blue_background"}
+        result = _prepare_callout_icon_for_update(content, notion_token="tok")
+        assert result is content
+
+    def test_file_icon_converted(self):
+        content = {
+            "rich_text": [],
+            "icon": {"type": "file", "file": {"url": "https://s3/x?sig=1"}},
+        }
+        with patch(
+            "notion_sync.diff.prepare_icon_for_api",
+            return_value={"type": "file_upload", "file_upload": {"id": "up-1"}},
+        ) as mock_prep:
+            result = _prepare_callout_icon_for_update(content, notion_token="tok")
+        mock_prep.assert_called_once()
+        assert result["icon"] == {"type": "file_upload", "file_upload": {"id": "up-1"}}
+        # Input not mutated
+        assert content["icon"] == {"type": "file", "file": {"url": "https://s3/x?sig=1"}}
+
+    def test_file_icon_conversion_failure_drops_icon(self):
+        content = {
+            "rich_text": [],
+            "icon": {"type": "file", "file": {"url": "https://s3/x?sig=1"}},
+        }
+        with patch("notion_sync.diff.prepare_icon_for_api", return_value=None):
+            result = _prepare_callout_icon_for_update(content, notion_token="tok")
+        assert "icon" not in result
 
 
 # ---------------------------------------------------------------------------
