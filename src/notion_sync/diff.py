@@ -11,7 +11,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
-from notion_sync.extract import extract_block_text
+from notion_sync.extract import extract_block_text, extract_link_identity
 from notion_sync.utils import prepare_icon_for_api, prepare_image_for_api
 
 logger = logging.getLogger(__name__)
@@ -265,6 +265,15 @@ def create_content_hash(block: dict[str, Any]) -> str:
                 # still caught via icon_type; a file->different-file swap is not.
                 icon_value = None
             extras += f":icon={icon_type}:{icon_value}"
+
+    # SPEC-LINK-002-M1: fold a normalized link identity so a link-only change
+    # (add / remove / retarget of a rich_text link) is detectable. Appended only
+    # when the block has linked runs, so linkless blocks keep their pre-LINK-002
+    # hash (no rebaseline flood — same rationale as the non-default color/icon
+    # fold above).
+    link_ident = extract_link_identity(block)
+    if link_ident:
+        extras += f":links={link_ident}"
 
     # Create normalized string and hash
     normalized = f"{block_type}:{text}{extras}"
