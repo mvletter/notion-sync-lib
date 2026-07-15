@@ -205,8 +205,17 @@ def create_content_hash(block: dict[str, Any]) -> str:
     """Create a stable hash for a Notion block based on its content.
 
     Used for content-based matching in generate_diff.
-    Includes: type, text content, block-specific properties (checked for to_do, language for code).
+    Includes: type, text content, block-specific properties (checked for to_do,
+    language for code, width for column), color, callout icon, and rich_text
+    link identity.
     Excludes: id, timestamps, user info (volatile).
+
+    AI-CONTEXT: This hash gates BOTH diff paths and Herald's change detection.
+    Any content dimension NOT folded in here is silently un-syncable AND
+    un-healable (found 3×: color, callout icon, links). When adding a
+    propagating dimension, fold it here (only when non-default/present, to
+    avoid a rebaseline flood) AND add a case to tests/test_content_hash_contract.py.
+    See herald docs/patterns/notion.md#notion-content-hash-contract.
 
     Args:
         block: A Notion block dictionary.
