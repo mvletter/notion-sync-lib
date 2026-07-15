@@ -11,7 +11,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
-from notion_sync.extract import extract_block_text
+from notion_sync.extract import extract_block_text, extract_link_identity
 from notion_sync.utils import prepare_icon_for_api, prepare_image_for_api
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,16 @@ _STRUCTURE_ONLY_BLOCKS = frozenset([
 #   because the API does not know the "unsupported" type.
 _NON_CREATABLE = frozenset({"child_database", "child_page", "meeting_notes", "unsupported"})
 
+# Block types with a writable `color` property whose value must feed the content
+# hash (SPEC-BLOCK-STYLE-001-M3). Without this, a master-side style-only edit
+# (color change) produces an identical hash — change detection never surfaces it
+# and the slave silently keeps its old color. `callout` is handled separately in
+# create_content_hash because it additionally hashes its `icon`.
+_COLOR_BEARING_TYPES = frozenset({
+    "paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "quote", "toggle", "to_do",
+})
+
 
 def _is_synced_copy(block: dict[str, Any]) -> bool:
     """Check if a block is a synced copy (read-only reference to original).
@@ -72,6 +82,43 @@ def _is_synced_copy(block: dict[str, Any]) -> bool:
 
     synced_from = block.get("synced_block", {}).get("synced_from")
     return synced_from is not None
+
+
+def _prepare_callout_icon_for_update(
+    block_content: dict, notion_token: str | None = None
+) -> dict:
+    """Return a callout content dict with a write-safe icon for the UPDATE path.
+
+    A callout icon read from Notion may be a 'file'-type icon backed by an
+    expiring S3 URL — passing it straight into an UPDATE PATCH sends a dead URL.
+    Mirrors the INSERT path (`_prepare_block_for_api`, callout branch): re-upload
+    'file'-type icons via `prepare_icon_for_api` (permanent file_upload.id when a
+    token is available, external-URL fallback otherwise), and leave already
+    write-compatible icons (emoji/external/custom_emoji/file_upload) untouched.
+
+    The input dict is never mutated. Returns the original object unchanged when no
+    conversion is needed (no icon, or a non-'file' icon), so callers can pass the
+    result straight to `_sanitize_for_update`.
+
+    Args:
+        block_content: The callout's content dict (e.g. block["callout"]).
+        notion_token: Optional Notion token for re-uploading 'file'-type icons.
+
+    Returns:
+        The original dict, or a shallow copy with `icon` converted/dropped.
+    """
+    icon = block_content.get("icon")
+    if not isinstance(icon, dict) or icon.get("type") != "file":
+        return block_content
+
+    converted = dict(block_content)
+    fixed_icon = prepare_icon_for_api(icon, notion_token=notion_token)
+    if fixed_icon:
+        converted["icon"] = fixed_icon
+    else:
+        converted.pop("icon", None)
+        logger.warning("Dropped callout icon on UPDATE: could not convert 'file' type")
+    return converted
 
 
 def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
@@ -106,6 +153,23 @@ def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
                 restricted["is_toggleable"] = block_content["is_toggleable"]
             if "color" in block_content:
                 restricted["color"] = block_content["color"]
+        elif block_type == "toggle":
+            # SPEC-BLOCK-STYLE-001-M2: toggle color was silently dropped here —
+            # it fell through the restricted branch without color being re-added,
+            # so a master-side color change never reached the slave.
+            if "color" in block_content:
+                restricted["color"] = block_content["color"]
+        elif block_type == "callout":
+            # SPEC-BLOCK-STYLE-001-M2: callout color AND icon were both dropped.
+            # `icon` here must already be write-safe (emoji/external/custom_emoji,
+            # or a re-uploaded file_upload) — a 'file'-type icon carries an
+            # expiring S3 URL and must be pre-converted by the caller via
+            # `_prepare_callout_icon_for_update` before reaching this function
+            # (this stays a pure dict-shaper with no I/O, R2.2).
+            if "color" in block_content:
+                restricted["color"] = block_content["color"]
+            if block_content.get("icon"):
+                restricted["icon"] = block_content["icon"]
         return {block_type: restricted}
 
     if block_type in _FILE_BASED_BLOCKS:
@@ -168,6 +232,48 @@ def create_content_hash(block: dict[str, Any]) -> str:
         width_ratio = type_data.get("width_ratio")
         if width_ratio is not None:
             extras = f":width={width_ratio}"
+
+    # SPEC-BLOCK-STYLE-001-M3: fold `color` (all color-bearing types) and the
+    # callout `icon` into the hash so a master-side style-only edit is detected.
+    # A "default" color is omitted so unstyled blocks keep their pre-M3 hash
+    # (avoids a phantom-diff flood on rebaseline for the common case).
+    if block_type in _COLOR_BEARING_TYPES:
+        color = block.get(block_type, {}).get("color", "default")
+        if color != "default":
+            extras += f":color={color}"
+    elif block_type == "callout":
+        callout_data = block.get(block_type, {})
+        color = callout_data.get("color", "default")
+        if color != "default":
+            extras += f":color={color}"
+        icon = callout_data.get("icon")
+        if isinstance(icon, dict):
+            icon_type = icon.get("type")
+            if icon_type == "emoji":
+                icon_value = icon.get("emoji")
+            elif icon_type == "external":
+                icon_value = (icon.get("external") or {}).get("url")
+            elif icon_type == "custom_emoji":
+                icon_value = (icon.get("custom_emoji") or {}).get("id")
+            elif icon_type == "file_upload":
+                icon_value = (icon.get("file_upload") or {}).get("id")
+            else:
+                # 'file'-type icons carry only an expiring S3 URL (no stable id).
+                # Deliberately NOT hashed — it would make the hash volatile on
+                # every re-fetch (same rationale as extractor.py's
+                # _VOLATILE_BLOCK_KEYS). A file->emoji swap or icon add/remove is
+                # still caught via icon_type; a file->different-file swap is not.
+                icon_value = None
+            extras += f":icon={icon_type}:{icon_value}"
+
+    # SPEC-LINK-002-M1: fold a normalized link identity so a link-only change
+    # (add / remove / retarget of a rich_text link) is detectable. Appended only
+    # when the block has linked runs, so linkless blocks keep their pre-LINK-002
+    # hash (no rebaseline flood — same rationale as the non-default color/icon
+    # fold above).
+    link_ident = extract_link_identity(block)
+    if link_ident:
+        extras += f":links={link_ident}"
 
     # Create normalized string and hash
     normalized = f"{block_type}:{text}{extras}"
@@ -423,6 +529,7 @@ def execute_recursive_diff(
     client: RateLimitedNotionClient,
     ops: list[dict[str, Any]],
     dry_run: bool = False,
+    notion_token: str | None = None,
 ) -> dict[str, int]:
     """Execute recursive diff operations (UPDATE only).
 
@@ -437,6 +544,10 @@ def execute_recursive_diff(
         client: RateLimitedNotionClient instance for API calls.
         ops: List of UPDATE operations from generate_recursive_diff.
         dry_run: If True, only count operations without executing.
+        notion_token: Optional Notion token. When provided, a callout block's
+            'file'-type icon is re-uploaded to a permanent file_upload before
+            the UPDATE (SPEC-BLOCK-STYLE-001-M2). Without it, a 'file' icon
+            falls back to its expiring external URL.
 
     Returns:
         Stats dict with counts: {updated, skipped}
@@ -497,6 +608,10 @@ def execute_recursive_diff(
                 continue
 
             block_content = local_block[local_type]
+            if local_type == "callout":
+                block_content = _prepare_callout_icon_for_update(
+                    block_content, notion_token=notion_token
+                )
             update_data = _sanitize_for_update(local_type, block_content)
 
             client.update_block(block_id=block_id, data=update_data)
@@ -1035,6 +1150,10 @@ def execute_diff(
                 else:
                     block_type = op["local_block"]["type"]
                     block_content = op["local_block"][block_type]
+                    if block_type == "callout":
+                        block_content = _prepare_callout_icon_for_update(
+                            block_content, notion_token=notion_token
+                        )
                     update_data = _sanitize_for_update(block_type, block_content)
                     try:
                         client.update_block(block_id=op["notion_block_id"], data=update_data)

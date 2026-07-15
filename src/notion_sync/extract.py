@@ -5,8 +5,84 @@ for comparison, hashing, and display purposes.
 """
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+# Matches a Notion UUID in compact (32 hex) or hyphenated (8-4-4-4-12) form.
+_UUID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+
+# Rich-text-bearing block types whose plain text is folded into the content
+# hash by extract_block_text — the same set whose links must be folded so the
+# hash and the link identity stay symmetric (SPEC-LINK-002-M1).
+_TEXT_BLOCK_TYPES = frozenset({
+    "paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "quote",
+    "callout", "toggle", "to_do", "code",
+})
+_CAPTIONED_TYPES = frozenset({"image", "video", "file", "pdf", "bookmark", "embed"})
+
+
+def _normalize_link_identity(url: str) -> str:
+    """Canonicalize a rich_text link URL into a stable identity string.
+
+    Notion-internal links (``/p/{page}[?q]#{block}``, ``notion.so/…{page}#{block}``,
+    ``notion://page/{page}``) normalize to ``notion:{page}[#{block}]`` with
+    compacted lowercase UUIDs — so the same target in relative, absolute or
+    query-string form yields ONE identity (otherwise every link-bearing block
+    would phantom-UPDATE on every apply). External URLs are their own identity.
+    """
+    if not url:
+        return ""
+    is_notion = url.startswith("/p/") or "notion.so/" in url or url.startswith("notion://")
+    if not is_notion:
+        return url
+    base, _, fragment = url.partition("#")
+    base_ids = _UUID_PATTERN.findall(base)
+    page = base_ids[-1].replace("-", "").lower() if base_ids else ""
+    frag_ids = _UUID_PATTERN.findall(fragment)
+    block = frag_ids[0].replace("-", "").lower() if frag_ids else ""
+    return f"notion:{page}#{block}" if block else f"notion:{page}"
+
+
+def _links_from_rich_text(rich_text: list[dict]) -> list[str]:
+    """Normalized identities of every linked ``text`` run, in document order."""
+    out = []
+    for run in rich_text or []:
+        if run.get("type") == "text":
+            link = run.get("text", {}).get("link")
+            url = link.get("url") if isinstance(link, dict) else None
+            if url:
+                out.append(_normalize_link_identity(url))
+    return out
+
+
+def extract_link_identity(block: dict) -> str:
+    """Concatenate normalized link identities from a block's rich_text runs.
+
+    Returns ``""`` when the block has no linked runs, so a linkless block folds
+    nothing into its content hash and keeps its exact pre-fix hash (flood
+    containment — SPEC-LINK-002-M1, R1.4). Walks the same rich_text-bearing
+    fields ``extract_block_text`` covers: text-type ``rich_text``,
+    ``table_row.cells``, and captions.
+    """
+    block_type = block.get("type", "")
+    block_data = block.get(block_type, {})
+    parts: list[str] = []
+
+    if block_type in _TEXT_BLOCK_TYPES:
+        parts.extend(_links_from_rich_text(block_data.get("rich_text", [])))
+    elif block_type == "table_row":
+        for cell in block_data.get("cells", []):
+            parts.extend(_links_from_rich_text(cell))
+
+    if block_type in _CAPTIONED_TYPES:
+        parts.extend(_links_from_rich_text(block_data.get("caption", [])))
+
+    return "|".join(parts)
 
 
 def extract_rich_text(rich_text: list[dict]) -> str:
