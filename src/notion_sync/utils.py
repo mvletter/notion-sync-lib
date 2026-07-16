@@ -97,6 +97,27 @@ def extract_page_icon(page: dict) -> dict | None:
     return page.get("icon") or None
 
 
+# Hosts of Notion-managed file storage. URLs on these hosts are signed and
+# expire (~1 hour); writing one as an `external` icon/image is accepted by the
+# API but never renders — the written-but-invisible failure mode of
+# SPEC-ICON-001. `secure.notion-static.com` is the pre-2021 bucket, still
+# served for old files.
+_SIGNED_FILE_URL_MARKERS = ("amazonaws.com", "notion-static.com")
+
+
+def is_signed_file_url(url: str | None) -> bool:
+    """True if `url` points at Notion's signed (expiring) file storage.
+
+    Such URLs must never be written as icon/image `external` references:
+    Notion accepts the write but the asset never renders, and the signature
+    expires anyway.
+    """
+    if not url:
+        return False
+    host = url.split("//", 1)[-1].split("/", 1)[0].lower()
+    return any(marker in host for marker in _SIGNED_FILE_URL_MARKERS)
+
+
 def prepare_icon_for_api(icon: dict | None, notion_token: str | None = None) -> dict | None:
     """Convert a page icon from Notion API response format to API request format.
 

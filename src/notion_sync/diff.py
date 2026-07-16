@@ -12,7 +12,7 @@ from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
 from notion_sync.extract import extract_block_text, extract_link_identity
-from notion_sync.utils import prepare_icon_for_api, prepare_image_for_api
+from notion_sync.utils import is_signed_file_url, prepare_image_for_api
 
 logger = logging.getLogger(__name__)
 
@@ -84,40 +84,135 @@ def _is_synced_copy(block: dict[str, Any]) -> bool:
     return synced_from is not None
 
 
+# SPEC-ICON-001: the deterministic fallback for callout icons that cannot be
+# represented via the write API. M0 probe (2026-07-16, live): Notion rejects
+# `file_upload` icons on callout blocks with HTTP 400 on BOTH
+# blocks.children.append AND blocks.update ("File upload icons are not
+# supported for this block type") — so a master's uploaded icon has NO
+# full-fidelity write representation. Convergence-critical: this exact emoji
+# joins the `file:None` hash equivalence class in create_content_hash.
+CALLOUT_ICON_FALLBACK_EMOJI = "⚠️"
+
+# Callout icon types the write API accepts as-is (subject to the signed-URL
+# check for `external`).
+_WRITE_SAFE_CALLOUT_ICON_TYPES = ("emoji", "external", "custom_emoji")
+
+
+def _is_renderable_callout_icon(icon: dict | None) -> bool:
+    """True if an icon *already on a slave block* renders in the Notion client.
+
+    `file`/`file_upload` render fine when they exist on a block (they are
+    workspace-hosted uploads) — they just cannot be *written* onto a callout.
+    An `external` icon renders unless it points at signed (expiring) Notion
+    file storage, which Notion accepts but never renders (SPEC-ICON-001).
+    """
+    if not isinstance(icon, dict):
+        return False
+    icon_type = icon.get("type")
+    if icon_type == "emoji":
+        return bool(icon.get("emoji"))
+    if icon_type == "custom_emoji":
+        return bool((icon.get("custom_emoji") or {}).get("id"))
+    if icon_type == "file":
+        return bool((icon.get("file") or {}).get("url"))
+    if icon_type == "file_upload":
+        return bool((icon.get("file_upload") or {}).get("id"))
+    if icon_type == "external":
+        url = (icon.get("external") or {}).get("url")
+        return bool(url) and not is_signed_file_url(url)
+    return False
+
+
+def resolve_callout_icon_for_write(
+    icon: dict | None, old_icon: dict | None = None
+) -> dict | None:
+    """Decide the write representation of a callout icon. The ONE decision
+    function for every path that writes callout icons (SPEC-ICON-001 M3).
+
+    - Write-safe icons (emoji / custom_emoji / `external` with a public URL)
+      pass through unchanged.
+    - Unrepresentable icons (`file`, `file_upload`, `external` pointing at
+      signed Notion file storage):
+        - old_icon renderable → None (omit: Notion preserves the slave's
+          existing icon — protects legacy uploaded icons and manual fixes)
+        - otherwise → the deterministic fallback emoji (heals broken/missing
+          icons; the only renderable representation the API accepts)
+    - Malformed/absent icons → None (omit).
+
+    Never performs I/O; never returns a `file_upload` icon or a signed-URL
+    `external` icon.
+
+    Args:
+        icon: The icon from the (master) block being written.
+        old_icon: The current icon on the slave block, if known (UPDATE path).
+            Pass None on create/INSERT.
+    """
+    if not isinstance(icon, dict) or not icon.get("type"):
+        return None
+
+    icon_type = icon.get("type")
+    if icon_type in _WRITE_SAFE_CALLOUT_ICON_TYPES:
+        if icon_type == "external" and is_signed_file_url(
+            (icon.get("external") or {}).get("url")
+        ):
+            pass  # signed URL: fall through to the unrepresentable branch
+        elif _is_renderable_callout_icon(icon):
+            return icon
+        else:
+            return None  # write-safe type but missing its value — omit
+
+    if _is_renderable_callout_icon(old_icon):
+        logger.debug(
+            "Callout icon (type=%r) not writable; omitting from payload to "
+            "preserve the slave's existing icon",
+            icon_type,
+        )
+        return None
+
+    logger.warning(
+        "Callout icon (type=%r) has no writable representation and the slave "
+        "icon is missing/broken — writing fallback emoji %r",
+        icon_type,
+        CALLOUT_ICON_FALLBACK_EMOJI,
+    )
+    return {"type": "emoji", "emoji": CALLOUT_ICON_FALLBACK_EMOJI}
+
+
 def _prepare_callout_icon_for_update(
-    block_content: dict, notion_token: str | None = None
+    block_content: dict,
+    notion_token: str | None = None,
+    old_icon: dict | None = None,
 ) -> dict:
     """Return a callout content dict with a write-safe icon for the UPDATE path.
 
-    A callout icon read from Notion may be a 'file'-type icon backed by an
-    expiring S3 URL — passing it straight into an UPDATE PATCH sends a dead URL.
-    Mirrors the INSERT path (`_prepare_block_for_api`, callout branch): re-upload
-    'file'-type icons via `prepare_icon_for_api` (permanent file_upload.id when a
-    token is available, external-URL fallback otherwise), and leave already
-    write-compatible icons (emoji/external/custom_emoji/file_upload) untouched.
+    SPEC-ICON-001: delegates the icon decision to
+    `resolve_callout_icon_for_write` with the old (slave) block's icon. The
+    previous implementation converted 'file'-type icons to `file_upload` via
+    re-upload — Notion rejects that on callout blocks with HTTP 400 (M0 probe,
+    2026-07-16), so it could never have worked.
 
-    The input dict is never mutated. Returns the original object unchanged when no
-    conversion is needed (no icon, or a non-'file' icon), so callers can pass the
-    result straight to `_sanitize_for_update`.
+    The input dict is never mutated. Returns the original object unchanged
+    when the icon needs no change, so callers can pass the result straight to
+    `_sanitize_for_update`.
 
     Args:
         block_content: The callout's content dict (e.g. block["callout"]).
-        notion_token: Optional Notion token for re-uploading 'file'-type icons.
-
-    Returns:
-        The original dict, or a shallow copy with `icon` converted/dropped.
+        notion_token: Unused; kept for call-site compatibility.
+        old_icon: The icon currently on the slave block (op["notion_block"]).
     """
     icon = block_content.get("icon")
-    if not isinstance(icon, dict) or icon.get("type") != "file":
+    if not isinstance(icon, dict):
+        return block_content
+
+    resolved = resolve_callout_icon_for_write(icon, old_icon=old_icon)
+    if resolved == icon:
         return block_content
 
     converted = dict(block_content)
-    fixed_icon = prepare_icon_for_api(icon, notion_token=notion_token)
-    if fixed_icon:
-        converted["icon"] = fixed_icon
-    else:
+    if resolved is None:
         converted.pop("icon", None)
-        logger.warning("Dropped callout icon on UPDATE: could not convert 'file' type")
+    else:
+        converted["icon"] = resolved
     return converted
 
 
@@ -251,12 +346,29 @@ def create_content_hash(block: dict[str, Any]) -> str:
             icon_type = icon.get("type")
             if icon_type == "emoji":
                 icon_value = icon.get("emoji")
+                # SPEC-ICON-001: the fallback emoji is the write representation
+                # of an uploaded master icon (Notion 400s file_upload icons on
+                # callouts, M0 probe 2026-07-16). Canonicalize it into the same
+                # class as 'file'/'file_upload' so a healed/created slave KEEPs
+                # against its master instead of phantom-updating forever. The
+                # emoji also leaks into `text` via extract_block_text's icon
+                # prefix — strip that too, or the canonicalization is moot.
+                if icon_value == CALLOUT_ICON_FALLBACK_EMOJI:
+                    icon_type, icon_value = "file", None
+                    prefix = f"{CALLOUT_ICON_FALLBACK_EMOJI} "
+                    if text.startswith(prefix):
+                        text = text[len(prefix):]
+                    elif text == CALLOUT_ICON_FALLBACK_EMOJI:
+                        text = ""
             elif icon_type == "external":
                 icon_value = (icon.get("external") or {}).get("url")
             elif icon_type == "custom_emoji":
                 icon_value = (icon.get("custom_emoji") or {}).get("id")
             elif icon_type == "file_upload":
-                icon_value = (icon.get("file_upload") or {}).get("id")
+                # SPEC-ICON-001: same equivalence class as 'file' — upload ids
+                # differ per upload for identical bytes, and a file_upload icon
+                # on a slave is "the uploaded master icon, represented".
+                icon_type, icon_value = "file", None
             else:
                 # 'file'-type icons carry only an expiring S3 URL (no stable id).
                 # Deliberately NOT hashed — it would make the hash volatile on
@@ -609,8 +721,11 @@ def execute_recursive_diff(
 
             block_content = local_block[local_type]
             if local_type == "callout":
+                old_content = (op["notion_block"] or {}).get(notion_type) or {}
                 block_content = _prepare_callout_icon_for_update(
-                    block_content, notion_token=notion_token
+                    block_content,
+                    notion_token=notion_token,
+                    old_icon=old_content.get("icon"),
                 )
             update_data = _sanitize_for_update(local_type, block_content)
 
@@ -1151,8 +1266,11 @@ def execute_diff(
                     block_type = op["local_block"]["type"]
                     block_content = op["local_block"][block_type]
                     if block_type == "callout":
+                        old_content = (notion_block or {}).get(block_type) or {}
                         block_content = _prepare_callout_icon_for_update(
-                            block_content, notion_token=notion_token
+                            block_content,
+                            notion_token=notion_token,
+                            old_icon=old_content.get("icon"),
                         )
                     update_data = _sanitize_for_update(block_type, block_content)
                     try:
@@ -1309,18 +1427,19 @@ def _prepare_block_for_api(
             cleaned[block_type] = prepare_image_for_api(image_data, notion_token=notion_token)
             logger.debug("Converted hosted image block for API write")
 
-    # Fix callout icons: 'file'-type icons from Notion's read API are not writable.
-    # Convert using prepare_icon_for_api which re-uploads to get a file_upload.id
-    # (permanent) when a token is provided, or falls back to external.url otherwise.
+    # Fix callout icons (SPEC-ICON-001): 'file'-type icons are not writable and
+    # Notion rejects `file_upload` icons on callout blocks with HTTP 400 (M0
+    # probe 2026-07-16, both append and update) — so there is no full-fidelity
+    # representation. INSERT has no existing slave icon to preserve, so
+    # unrepresentable icons become the deterministic fallback emoji. No upload.
     if block_type == "callout" and "callout" in cleaned:
         icon = cleaned["callout"].get("icon")
-        if isinstance(icon, dict) and icon.get("type") == "file":
-            fixed_icon = prepare_icon_for_api(icon, notion_token=notion_token)
-            if fixed_icon:
-                cleaned["callout"]["icon"] = fixed_icon
-            else:
+        if isinstance(icon, dict):
+            resolved = resolve_callout_icon_for_write(icon, old_icon=None)
+            if resolved is None:
                 cleaned["callout"].pop("icon", None)
-                logger.warning("Dropped callout icon: could not convert from 'file' type")
+            elif resolved != icon:
+                cleaned["callout"]["icon"] = resolved
 
     # Convert _children to proper API format
     # AI-CONTEXT: See docs/pitfalls.md#api-nested-blocks-format

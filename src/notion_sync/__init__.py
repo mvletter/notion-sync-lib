@@ -25,6 +25,7 @@ from notion_sync.modify import delete_all_blocks, append_blocks
 
 # Diff operations
 from notion_sync.diff import (
+    CALLOUT_ICON_FALLBACK_EMOJI,
     generate_diff,
     generate_recursive_diff,
     execute_diff,
@@ -32,6 +33,7 @@ from notion_sync.diff import (
     execute_tree_sync,
     format_diff_preview,
     create_content_hash,
+    resolve_callout_icon_for_write,
 )
 
 # Column operations
@@ -62,7 +64,7 @@ from notion_sync.builders import (
 )
 
 # Utils
-from notion_sync.utils import get_notion_token, extract_page_id, extract_page_title, extract_page_icon, prepare_icon_for_api
+from notion_sync.utils import get_notion_token, extract_page_id, extract_page_title, extract_page_icon, prepare_icon_for_api, is_signed_file_url
 
 # rich_text
 from notion_sync.rich_text import (
@@ -120,6 +122,9 @@ __all__ = [
     "extract_page_title",
     "extract_page_icon",
     "prepare_icon_for_api",
+    "is_signed_file_url",
+    "CALLOUT_ICON_FALLBACK_EMOJI",
+    "resolve_callout_icon_for_write",
     # rich_text
     "chunk_rich_text",
     "chunk_block_payload",
