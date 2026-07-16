@@ -94,8 +94,12 @@ def _is_synced_copy(block: dict[str, Any]) -> bool:
 CALLOUT_ICON_FALLBACK_EMOJI = "⚠️"
 
 # Callout icon types the write API accepts as-is (subject to the signed-URL
-# check for `external`).
-_WRITE_SAFE_CALLOUT_ICON_TYPES = ("emoji", "external", "custom_emoji")
+# check for `external`). "icon" is Notion's native built-in icon type
+# ({"type": "icon", "icon": {"name": ..., "color": ...}}) — served for icons
+# picked from the UI's Icons tab since ~2026 and writable per the API docs
+# (developers.notion.com/reference/emoji-and-icon) and the M0 400 message
+# ("Use emoji, external, custom_emoji, or icon instead").
+_WRITE_SAFE_CALLOUT_ICON_TYPES = ("emoji", "external", "custom_emoji", "icon")
 
 
 def _is_renderable_callout_icon(icon: dict | None) -> bool:
@@ -120,6 +124,8 @@ def _is_renderable_callout_icon(icon: dict | None) -> bool:
     if icon_type == "external":
         url = (icon.get("external") or {}).get("url")
         return bool(url) and not is_signed_file_url(url)
+    if icon_type == "icon":
+        return bool((icon.get("icon") or {}).get("name"))
     return False
 
 
@@ -156,6 +162,14 @@ def resolve_callout_icon_for_write(
             (icon.get("external") or {}).get("url")
         ):
             pass  # signed URL: fall through to the unrepresentable branch
+        elif icon_type == "icon" and _is_renderable_callout_icon(icon):
+            # Normalize to the documented write shape ({name, color}) in case
+            # the read API decorates it with extra fields.
+            native = icon.get("icon") or {}
+            normalized = {"name": native["name"]}
+            if native.get("color"):
+                normalized["color"] = native["color"]
+            return {"type": "icon", "icon": normalized}
         elif _is_renderable_callout_icon(icon):
             return icon
         else:
@@ -373,6 +387,11 @@ def create_content_hash(block: dict[str, Any]) -> str:
                 icon_value = (icon.get("external") or {}).get("url")
             elif icon_type == "custom_emoji":
                 icon_value = (icon.get("custom_emoji") or {}).get("id")
+            elif icon_type == "icon":
+                # Native built-in icon: stable identity is name + color
+                # (color defaults to gray per the API docs).
+                native = icon.get("icon") or {}
+                icon_value = f"{native.get('name')}/{native.get('color') or 'gray'}"
             elif icon_type == "file_upload":
                 # SPEC-ICON-001: same equivalence class as 'file' — upload ids
                 # differ per upload for identical bytes, and a file_upload icon

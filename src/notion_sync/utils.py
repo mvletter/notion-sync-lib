@@ -173,6 +173,20 @@ def prepare_icon_for_api(icon: dict | None, notion_token: str | None = None) -> 
             return None
         return {"type": "custom_emoji", "custom_emoji": {"id": custom_id}}
 
+    if icon_type == "icon":
+        # Native built-in Notion icon (Icons tab): {"name": ..., "color": ...}.
+        # Writable per developers.notion.com/reference/emoji-and-icon; color
+        # defaults to gray when omitted. Strip any extra read-side fields.
+        native = icon.get("icon") or {}
+        name = native.get("name")
+        if not name:
+            logger.warning("'icon' icon has no name, skipping icon sync")
+            return None
+        normalized = {"name": name}
+        if native.get("color"):
+            normalized["color"] = native["color"]
+        return {"type": "icon", "icon": normalized}
+
     if icon_type == "file":
         url = icon.get("file", {}).get("url")
         if not url:
