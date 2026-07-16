@@ -248,23 +248,22 @@ class TestCalloutSanitization:
         assert data["callout"]["icon"] == {"type": "emoji", "emoji": "💡"}
         assert data["callout"]["color"] == "yellow_background"
 
-    def test_diff_callout_file_icon_reuploaded(self):
-        """execute_diff with a token: a 'file'-type callout icon is re-uploaded
-        to a file_upload ref (expiring S3 URL never reaches the UPDATE)."""
+    def test_diff_callout_file_icon_omitted_when_slave_renderable(self):
+        """SPEC-ICON-001: execute_diff never re-uploads a 'file'-type callout
+        icon (Notion 400s file_upload icons on callouts — M0 probe 2026-07-16).
+        With a renderable icon on the slave block, the icon is omitted from the
+        PATCH so the slave's existing icon is preserved — color still synced."""
         client = _make_mock_client()
         ops = [_make_diff_op("callout", {
             "rich_text": [{"type": "text", "text": {"content": "note"}}],
             "icon": {"type": "file", "file": {"url": "https://s3/expiring?x=1"}},
             "color": "blue_background",
         })]
-        with patch(
-            "notion_sync.diff.prepare_icon_for_api",
-            return_value={"type": "file_upload", "file_upload": {"id": "up-123"}},
-        ) as mock_prep:
+        with patch("notion_sync.utils.prepare_icon_for_api") as mock_prep:
             execute_diff(client, ops, page_id="page-1", notion_token="tok")
-        mock_prep.assert_called_once()
+        mock_prep.assert_not_called()
         data = _get_update_data(client)
-        assert data["callout"]["icon"] == {"type": "file_upload", "file_upload": {"id": "up-123"}}
+        assert "icon" not in data["callout"]
         assert data["callout"]["color"] == "blue_background"
 
     def test_diff_callout_file_icon_conversion_fails_drops_icon(self):
@@ -276,7 +275,7 @@ class TestCalloutSanitization:
             "icon": {"type": "file", "file": {"url": "https://s3/expiring?x=1"}},
             "color": "blue_background",
         })]
-        with patch("notion_sync.diff.prepare_icon_for_api", return_value=None):
+        with patch("notion_sync.utils.prepare_icon_for_api", return_value=None):
             execute_diff(client, ops, page_id="page-1", notion_token="tok")
         data = _get_update_data(client)
         assert "icon" not in data["callout"]
@@ -907,7 +906,7 @@ class TestPrepareCalloutIconForUpdate:
     def test_emoji_icon_passthrough_no_conversion(self):
         """Emoji icons are already write-safe — returned unchanged, no I/O."""
         content = {"rich_text": [], "icon": {"type": "emoji", "emoji": "🔥"}}
-        with patch("notion_sync.diff.prepare_icon_for_api") as mock_prep:
+        with patch("notion_sync.utils.prepare_icon_for_api") as mock_prep:
             result = _prepare_callout_icon_for_update(content, notion_token="tok")
         mock_prep.assert_not_called()
         assert result is content  # same object, not copied
@@ -917,29 +916,34 @@ class TestPrepareCalloutIconForUpdate:
         result = _prepare_callout_icon_for_update(content, notion_token="tok")
         assert result is content
 
-    def test_file_icon_converted(self):
+    def test_file_icon_omitted_when_old_renderable(self):
+        """SPEC-ICON-001: no re-upload (Notion 400s file_upload callout icons);
+        renderable slave icon → omit from payload (preserve)."""
         content = {
             "rich_text": [],
             "icon": {"type": "file", "file": {"url": "https://s3/x?sig=1"}},
         }
-        with patch(
-            "notion_sync.diff.prepare_icon_for_api",
-            return_value={"type": "file_upload", "file_upload": {"id": "up-1"}},
-        ) as mock_prep:
-            result = _prepare_callout_icon_for_update(content, notion_token="tok")
-        mock_prep.assert_called_once()
-        assert result["icon"] == {"type": "file_upload", "file_upload": {"id": "up-1"}}
+        with patch("notion_sync.utils.prepare_icon_for_api") as mock_prep:
+            result = _prepare_callout_icon_for_update(
+                content,
+                notion_token="tok",
+                old_icon={"type": "emoji", "emoji": "💡"},
+            )
+        mock_prep.assert_not_called()
+        assert "icon" not in result
         # Input not mutated
         assert content["icon"] == {"type": "file", "file": {"url": "https://s3/x?sig=1"}}
 
-    def test_file_icon_conversion_failure_drops_icon(self):
+    def test_file_icon_missing_old_gets_fallback(self):
+        """SPEC-ICON-001: no renderable slave icon → deterministic ⚠️ fallback."""
+        from notion_sync.diff import CALLOUT_ICON_FALLBACK_EMOJI
+
         content = {
             "rich_text": [],
             "icon": {"type": "file", "file": {"url": "https://s3/x?sig=1"}},
         }
-        with patch("notion_sync.diff.prepare_icon_for_api", return_value=None):
-            result = _prepare_callout_icon_for_update(content, notion_token="tok")
-        assert "icon" not in result
+        result = _prepare_callout_icon_for_update(content, notion_token="tok")
+        assert result["icon"] == {"type": "emoji", "emoji": CALLOUT_ICON_FALLBACK_EMOJI}
 
 
 # ---------------------------------------------------------------------------
