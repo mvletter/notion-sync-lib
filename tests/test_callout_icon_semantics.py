@@ -287,6 +287,90 @@ class TestPrepareCalloutIconForUpdateOldAware:
 
 
 # ---------------------------------------------------------------------------
+# Native built-in icon type ("icon") — SPEC-ICON-001 addendum (2026-07-16)
+# ---------------------------------------------------------------------------
+
+NATIVE_ICON = {"type": "icon", "icon": {"name": "exclamation-mark", "color": "blue"}}
+
+
+class TestNativeIconType:
+    """Notion serves Icons-tab picks as {"type": "icon", "icon": {name, color}}
+    and accepts them on callout writes (API docs + the M0 400 message). Live
+    incident 2026-07-16 09:15: a master callout switched to a built-in blue
+    exclamation mark was omitted by the sync (unknown type) — the slave kept
+    the ⚠️ fallback instead of gaining the native icon."""
+
+    def test_resolve_passes_native_icon_through(self):
+        assert resolve_callout_icon_for_write(dict(NATIVE_ICON)) == NATIVE_ICON
+
+    def test_resolve_strips_extra_read_fields(self):
+        decorated = {
+            "type": "icon",
+            "icon": {"name": "exclamation-mark", "color": "blue", "url": "https://x/y.svg"},
+        }
+        assert resolve_callout_icon_for_write(decorated) == NATIVE_ICON
+
+    def test_resolve_native_icon_without_name_omitted(self):
+        assert resolve_callout_icon_for_write({"type": "icon", "icon": {}}) is None
+
+    def test_native_icon_color_defaults_hash_gray(self):
+        no_color = {"type": "icon", "icon": {"name": "exclamation-mark"}}
+        gray = {"type": "icon", "icon": {"name": "exclamation-mark", "color": "gray"}}
+        assert create_content_hash(_callout(icon=no_color)) == \
+            create_content_hash(_callout(icon=gray))
+
+    def test_native_icon_hash_detects_name_and_color_changes(self):
+        blue = _callout(icon={"type": "icon", "icon": {"name": "exclamation-mark", "color": "blue"}})
+        red = _callout(icon={"type": "icon", "icon": {"name": "exclamation-mark", "color": "red"}})
+        pizza = _callout(icon={"type": "icon", "icon": {"name": "pizza", "color": "blue"}})
+        assert create_content_hash(blue) != create_content_hash(red)
+        assert create_content_hash(blue) != create_content_hash(pizza)
+
+    def test_native_icon_differs_from_file_class(self):
+        """Master switches uploaded icon → native icon: must be detected as a
+        change against a slave still carrying file/⚠️ (UPDATE, not KEEP)."""
+        assert create_content_hash(_callout(icon=dict(NATIVE_ICON))) != \
+            create_content_hash(_callout(icon=FILE_ICON))
+        assert create_content_hash(_callout(icon=dict(NATIVE_ICON))) != \
+            create_content_hash(_callout(icon=FALLBACK_ICON))
+
+    def test_native_icon_converges_with_itself(self):
+        """After the write propagates, the slave reads back the same native
+        icon → hashes equal → KEEP (no phantom updates)."""
+        assert create_content_hash(_callout(icon=dict(NATIVE_ICON))) == \
+            create_content_hash(_callout(icon=dict(NATIVE_ICON)))
+
+    def test_update_payload_carries_native_icon(self):
+        """UPDATE against a slave with the ⚠️ fallback: the native icon must
+        be WRITTEN (upgrade), not omitted."""
+        client = _make_client()
+        execute_diff(client, [_update_op(dict(NATIVE_ICON), dict(FALLBACK_ICON))], page_id="p1")
+        data = client.update_block.call_args.kwargs["data"]
+        assert data["callout"]["icon"] == NATIVE_ICON
+
+    def test_native_icon_renderable_as_old_icon(self):
+        """A slave already carrying a native icon counts as renderable: a
+        master file-type icon must omit (preserve), not stomp it with ⚠️."""
+        content = {"rich_text": [], "icon": dict(FILE_ICON)}
+        result = _prepare_callout_icon_for_update(content, old_icon=dict(NATIVE_ICON))
+        assert "icon" not in result
+
+    def test_prepare_icon_for_api_supports_native_icon(self):
+        from notion_sync.utils import prepare_icon_for_api
+
+        decorated = {
+            "type": "icon",
+            "icon": {"name": "exclamation-mark", "color": "blue", "url": "https://x/y.svg"},
+        }
+        assert prepare_icon_for_api(decorated) == NATIVE_ICON
+
+    def test_insert_path_carries_native_icon(self):
+        block = _callout(icon=dict(NATIVE_ICON))
+        prepared = _prepare_block_for_api(block, notion_token="tok")
+        assert prepared["callout"]["icon"] == NATIVE_ICON
+
+
+# ---------------------------------------------------------------------------
 # execute_diff UPDATE ops end-to-end payload checks
 # ---------------------------------------------------------------------------
 
