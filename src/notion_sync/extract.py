@@ -114,6 +114,11 @@ def extract_mention_identity(block: dict) -> str:
     date mentions are deliberately NOT folded (their hash behavior must not
     shift). Walks the same rich_text-bearing fields ``extract_block_text``
     covers: text-type ``rich_text``, ``table_row.cells``, and captions.
+
+    AI-CONTEXT: See Herald docs/patterns/notion.md#notion-content-hash-contract
+    (occurrence #4). Known open gap: page-mention RETARGETS (same anchor text,
+    different target id) are still hash-invisible — occurrence #5 waiting to
+    happen; fold their identity here when that lands.
     """
     block_type = block.get("type", "")
     block_data = block.get(block_type, {})
