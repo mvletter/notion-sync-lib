@@ -67,6 +67,9 @@ DIMENSION_CASES = [
     ("callout_icon",
         {"type": "callout", "callout": {"rich_text": [_text_run("x")], "icon": {"type": "emoji", "emoji": "⬆️"}}},
         {"type": "callout", "callout": {"rich_text": [_text_run("x")], "icon": {"type": "emoji", "emoji": "🔽"}}}),
+    ("heading_toggleable",
+        {"type": "heading_2", "heading_2": {"rich_text": [_text_run("x")], "is_toggleable": False}},
+        {"type": "heading_2", "heading_2": {"rich_text": [_text_run("x")], "is_toggleable": True}}),
 ]
 
 
@@ -87,6 +90,9 @@ FLOOD_INVARIANTS = [
     ("internal_link_form_canonical",
         _para("x", url=f"/p/{PAGE}#{BLOCK_A}"),
         _para("x", url=f"https://www.notion.so/{PAGE}#{BLOCK_A}")),
+    ("heading_not_toggleable_equals_absent",
+        {"type": "heading_2", "heading_2": {"rich_text": [_text_run("x")], "is_toggleable": False}},
+        {"type": "heading_2", "heading_2": {"rich_text": [_text_run("x")]}}),
 ]
 
 
