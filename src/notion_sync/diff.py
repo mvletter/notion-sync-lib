@@ -363,6 +363,14 @@ def create_content_hash(block: dict[str, Any]) -> str:
         color = block.get(block_type, {}).get("color", "default")
         if color != "default":
             extras += f":color={color}"
+        # Fold heading toggle-ability so a plain-heading master can heal a slave
+        # that (historically) has a toggle-heading with identical text — without
+        # this, such blocks hash equal, KEEP forever, and the toggle state is
+        # un-syncable. Folded only when True so plain headings keep their
+        # pre-existing hash (no rebaseline flood — same rationale as color).
+        if block_type in ("heading_1", "heading_2", "heading_3"):
+            if block.get(block_type, {}).get("is_toggleable", False):
+                extras += ":toggleable=true"
     elif block_type == "callout":
         callout_data = block.get(block_type, {})
         color = callout_data.get("color", "default")

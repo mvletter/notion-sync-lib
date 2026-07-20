@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.17] - 2026-07-20
+
+### Fixed
+
+- **Heading toggle state un-syncable**: Fixed slave toggle-headings never healing back to plain headings when the master heading has identical text. `create_content_hash` did not fold `is_toggleable`, so a slave `heading_1/2/3` with `is_toggleable: true` hashed equal to the master's plain heading — the diff emitted KEEP forever and the toggle state was silently un-syncable (hash-contract recurrence: color, callout icon, links, mentions came before). Now folds `:toggleable=true` into the hash, only when true, so plain headings keep their pre-existing hash (no rebaseline flood). The UPDATE path already carried `is_toggleable`, so a hash mismatch is all that was needed to heal.
+
 ## [1.2.3] - 2026-02-18
 
 ### Fixed
