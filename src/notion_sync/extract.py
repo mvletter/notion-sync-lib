@@ -85,6 +85,52 @@ def extract_link_identity(block: dict) -> str:
     return "|".join(parts)
 
 
+def _custom_emoji_from_rich_text(rich_text: list[dict]) -> list[str]:
+    """Identities of every custom-emoji mention run, in document order."""
+    out = []
+    for run in rich_text or []:
+        if run.get("type") == "mention":
+            mention = run.get("mention") or {}
+            if mention.get("type") == "custom_emoji":
+                emoji_id = (mention.get("custom_emoji") or {}).get("id")
+                if emoji_id:
+                    out.append(f"custom_emoji:{emoji_id}")
+    return out
+
+
+def extract_mention_identity(block: dict) -> str:
+    """Concatenate custom-emoji mention identities from a block's rich_text runs.
+
+    A custom-emoji mention's ``plain_text`` is its shortcode (":sa-flag:"), so a
+    block carrying the mention and a block carrying the literal shortcode text
+    flatten to the same plain text — without this fold they hash equal and a
+    broken slave is KEEP'd forever (un-syncable AND un-healable; live-confirmed
+    2026-07-20, Herald SPEC-EMOJI-001-M5, occurrence #4 of the hash-contract
+    pitfall).
+
+    Returns ``""`` when the block has no custom-emoji mentions, so unaffected
+    blocks keep their exact pre-fix hash (flood containment — same rationale as
+    SPEC-LINK-002-M1 R1.4). Scoped to ``custom_emoji`` mentions only: page/user/
+    date mentions are deliberately NOT folded (their hash behavior must not
+    shift). Walks the same rich_text-bearing fields ``extract_block_text``
+    covers: text-type ``rich_text``, ``table_row.cells``, and captions.
+    """
+    block_type = block.get("type", "")
+    block_data = block.get(block_type, {})
+    parts: list[str] = []
+
+    if block_type in _TEXT_BLOCK_TYPES:
+        parts.extend(_custom_emoji_from_rich_text(block_data.get("rich_text", [])))
+    elif block_type == "table_row":
+        for cell in block_data.get("cells", []):
+            parts.extend(_custom_emoji_from_rich_text(cell))
+
+    if block_type in _CAPTIONED_TYPES:
+        parts.extend(_custom_emoji_from_rich_text(block_data.get("caption", [])))
+
+    return "|".join(parts)
+
+
 def extract_rich_text(rich_text: list[dict]) -> str:
     """Extract plain text from a Notion rich_text array.
 

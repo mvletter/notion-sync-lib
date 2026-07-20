@@ -11,7 +11,11 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
-from notion_sync.extract import extract_block_text, extract_link_identity
+from notion_sync.extract import (
+    extract_block_text,
+    extract_link_identity,
+    extract_mention_identity,
+)
 from notion_sync.utils import is_signed_file_url, prepare_image_for_api
 
 logger = logging.getLogger(__name__)
@@ -414,6 +418,16 @@ def create_content_hash(block: dict[str, Any]) -> str:
     link_ident = extract_link_identity(block)
     if link_ident:
         extras += f":links={link_ident}"
+
+    # SPEC-EMOJI-001-M5 (Herald): fold custom-emoji mention identity so a
+    # mention-vs-literal-shortcode difference is detectable — their plain text
+    # is identical (":sa-flag:"), so without this fold a slave that lost the
+    # mention hashes equal to a master that has it and is KEEP'd forever.
+    # Appended only when custom-emoji mentions are present (no rebaseline
+    # flood — same rationale as the link fold above).
+    mention_ident = extract_mention_identity(block)
+    if mention_ident:
+        extras += f":mentions={mention_ident}"
 
     # Create normalized string and hash
     normalized = f"{block_type}:{text}{extras}"
