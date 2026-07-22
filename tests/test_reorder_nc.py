@@ -373,7 +373,9 @@ class TestAC6_NonCreatableConstant:
         assert isinstance(_NON_CREATABLE, frozenset)
 
     def test_non_creatable_contains_all_types(self):
-        assert _NON_CREATABLE == frozenset({"child_database", "child_page", "meeting_notes"})
+        assert _NON_CREATABLE == frozenset(
+            {"child_database", "child_page", "meeting_notes", "unsupported"}
+        )
 
     def test_no_inline_tuples_in_diff_py(self):
         """Grep-style check: no inline ("child_database", "child_page") tuples remain."""

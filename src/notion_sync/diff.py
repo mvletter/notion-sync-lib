@@ -1297,7 +1297,19 @@ def execute_diff(
                 stats["kept"] += 1
 
             elif op["op"] == "UPDATE":
-                if notion_block and _is_synced_copy(notion_block):
+                # Never update a non-creatable block (child_database, etc.) — the
+                # blocks update API does not support their payloads, and the
+                # block's identity must be preserved regardless (SPEC-NCBLOCK-002).
+                if (notion_block and notion_block.get("type") in _NON_CREATABLE) or (
+                    op["local_block"].get("type") in _NON_CREATABLE
+                ):
+                    logger.debug(
+                        "Skipping UPDATE of non-creatable block at index %d — preserving in place",
+                        op["index"],
+                    )
+                    last_block_id = op["notion_block_id"]
+                    stats["kept"] = stats.get("kept", 0) + 1
+                elif notion_block and _is_synced_copy(notion_block):
                     logger.debug(
                         "Skipping UPDATE of synced copy block at index %d - read-only reference",
                         op["index"]
@@ -1384,7 +1396,35 @@ def execute_diff(
                 stats["inserted"] += 1
 
             elif op["op"] == "REPLACE":
-                # Skip non-creatable blocks — cannot be added via blocks API
+                # Never delete a non-creatable OLD block (child_database, etc.).
+                # It cannot be re-created via the blocks API, so deleting it is
+                # permanent data loss (SPEC-NCBLOCK-002: this is the line that
+                # destroyed the "Help Pages NL" database on 2026-07-22). Preserve
+                # it in place; insert the replacement content after it so nothing
+                # is lost, even if the surrounding order is imperfect.
+                if notion_block and notion_block.get("type") in _NON_CREATABLE:
+                    logger.warning(
+                        "REPLACE at index %d targets non-creatable %s — preserving "
+                        "it (not deleting) and inserting replacement content after",
+                        op["index"], notion_block.get("type"),
+                    )
+                    last_block_id = op["notion_block_id"]
+                    stats["kept"] = stats.get("kept", 0) + 1
+                    if op["local_block"].get("type") in _NON_CREATABLE:
+                        # New side is also non-creatable — nothing insertable.
+                        stats["skipped"] = stats.get("skipped", 0) + 1
+                        continue
+                    blocks_to_insert = [
+                        _prepare_block_for_api(op["local_block"], notion_token=notion_token)
+                    ]
+                    result = client.append_blocks(
+                        page_id=page_id, blocks=blocks_to_insert, after=last_block_id,
+                    )
+                    last_block_id = result["results"][0]["id"]
+                    stats["inserted"] += 1
+                    continue
+
+                # Skip non-creatable NEW blocks — cannot be added via blocks API
                 if op["local_block"].get("type") in _NON_CREATABLE:
                     logger.info(
                         "Skipping REPLACE of %s block at index %d",
