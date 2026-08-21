@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.19] - 2026-08-21
+
+### Fixed
+
+- **Silent page rotation when the first block is replaced**: Fixed `execute_diff` placing a REPLACE'd block at the END of the page instead of at its desired position, rotating the whole page. `_needs_reorder` counted REPLACE as a position anchor, but REPLACE deletes the old block and *creates a new one* via `append_blocks` — and `after=None` appends to the end, since the Notion API has no prepend. So a REPLACE before any surviving block skipped the safe delete-and-reinsert path, and every later KEEP anchored the remaining inserts ahead of the misplaced replacement. Only KEEP and UPDATE are anchors now; INSERT and REPLACE both trigger the reorder path when a KEEP/UPDATE follows. Two blocks were enough to reproduce (`old=[heading_2, paragraph]`, `new=[callout, same paragraph]` → the callout ended up last). Trigger in practice: retyping or changing the type of a page's first block while a later block stays untouched. This rotated a live 33-block help-center page twice on 2026-08-21 — every block present exactly once, but the page opened mid-article, and force-retranslate reproduced the damage instead of repairing it. A trailing insert with nothing anchored after it still takes the cheap path, so content-only edits do not rebuild the page. New `tests/test_reorder_replace_anchor.py` adds an ordering simulator asserting the previously untested invariant "after execute_diff, the physical block order equals new_blocks" (532/2000 randomised scenarios failed before the fix, 0 after). See SPEC-ORDER-001.
+
 ## [1.2.17] - 2026-07-20
 
 ### Fixed

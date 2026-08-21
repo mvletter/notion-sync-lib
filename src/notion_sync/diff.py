@@ -1038,27 +1038,40 @@ def _needs_reorder(ops: list[dict[str, Any]]) -> bool:
     block (via the ``after`` parameter).  When ``after=None``, blocks are appended
     to the END of the parent — there is no "prepend" operation.
 
-    This means that when ``generate_diff`` produces INSERT ops that should appear
-    BEFORE KEEP/UPDATE blocks in the final result, executing them naively would
-    place those inserts at the wrong position (end instead of beginning).
+    This means that when ``generate_diff`` produces ops that CREATE a block which
+    should appear BEFORE KEEP/UPDATE blocks in the final result, executing them
+    naively would place those blocks at the wrong position (end instead of
+    beginning).
 
-    Example problem case::
+    Only **KEEP** and **UPDATE** are position anchors: they leave an existing
+    block where it already is.  **INSERT and REPLACE both create a new block**
+    via ``append_blocks`` and are therefore subject to the no-prepend limitation
+    — REPLACE deletes the old block first, so it cannot inherit its position
+    (SPEC-ORDER-001).
+
+    Example problem cases::
 
         ops = [INSERT X, KEEP A, KEEP B, DELETE C]
         # execute_diff would: insert X at end, keep A, keep B, delete C
         # Result: [A, B, X] — wrong! X should be before A.
 
+        ops = [REPLACE A->X, KEEP B]
+        # execute_diff would: delete A, append X at END (no anchor yet), keep B
+        # Result: [B, X] — wrong! X should be before B.
+        # This rotated a live 33-block help-center page on 2026-08-21.
+
     Returns:
-        True when any INSERT appears before a KEEP/UPDATE op (while last_block_id
-        would still be None), indicating that a full delete+reinsert is needed.
+        True when an INSERT or REPLACE appears before any KEEP/UPDATE op (while
+        last_block_id would still be None), indicating that a full
+        delete+reinsert is needed.
     """
     seen_anchor = False  # becomes True once last_block_id would be set in execute_diff
     for i, op in enumerate(ops):
-        if op["op"] in ("KEEP", "UPDATE", "REPLACE"):
+        if op["op"] in ("KEEP", "UPDATE"):
             seen_anchor = True
-        elif op["op"] == "INSERT":
+        elif op["op"] in ("INSERT", "REPLACE"):
             if not seen_anchor:
-                # INSERT with no prior anchor — would go to END.
+                # Creates a block with no prior anchor — would go to END.
                 # Only a problem if KEEP/UPDATE blocks follow (wrong relative order).
                 has_keep_after = any(
                     o["op"] in ("KEEP", "UPDATE") for o in ops[i + 1:]

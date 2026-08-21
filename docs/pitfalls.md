@@ -92,6 +92,51 @@ execute_diff(client, ops, clone_id, dry_run=False)
 
 ---
 
+## api-append-cannot-prepend
+
+**Trigger:** Adding an op type to `execute_diff`, or deciding whether an op needs `_execute_reorder`
+
+`append_block_children` can only insert AFTER an existing block. `after=None`
+appends to the END of the parent — Notion has no prepend. So any op that
+**creates** a block cannot place it before a block that is staying put; only a
+full delete-and-reinsert (`_execute_reorder`) can.
+
+The trap is classifying ops by "does it touch an existing block" instead of
+"does it create one". REPLACE touches an existing block (deletes it) *and*
+creates a new one, so it looks like an anchor and behaves like an insert.
+
+❌ Wrong:
+```python
+# REPLACE is treated as a position anchor because it has a notion_block_id
+if op["op"] in ("KEEP", "UPDATE", "REPLACE"):
+    seen_anchor = True
+# ops = [REPLACE A->X, KEEP B]  → delete A, append X at END, keep B
+# Result: [B, X] — the whole page rotates
+```
+
+✅ Right:
+```python
+# Only ops that LEAVE an existing block in place are anchors
+if op["op"] in ("KEEP", "UPDATE"):
+    seen_anchor = True
+elif op["op"] in ("INSERT", "REPLACE"):   # both create a block
+    if not seen_anchor and any(o["op"] in ("KEEP", "UPDATE") for o in ops[i + 1:]):
+        return True                        # must use _execute_reorder
+    seen_anchor = True
+```
+
+**Rule:** an op is a position anchor only if it leaves an existing block where it
+already is (KEEP, UPDATE). Anything that creates a block (INSERT, REPLACE) is
+subject to the no-prepend limitation.
+
+**Why it bites silently:** nothing errors. The sync reports success, block counts
+match, no content is lost — the page is just in the wrong order. Assert the
+*order* (`tests/test_reorder_replace_anchor.py`), not just the ops or counts.
+A live 33-block help-center page rotated twice before this was found
+(SPEC-ORDER-001, 2026-08-21).
+
+---
+
 ## api-nested-blocks-format
 
 **Trigger:** Inserting blocks with children (toggles, column_list), _prepare_block_for_api, API validation errors
