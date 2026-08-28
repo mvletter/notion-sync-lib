@@ -322,14 +322,22 @@ class TestToggleSanitization:
 
 
 # ---------------------------------------------------------------------------
-# File-based blocks (caption only)
+# File-based blocks (caption + write-safe source)
 # ---------------------------------------------------------------------------
 
 class TestFileBasedSanitization:
-    """image/video/pdf/file/audio — caption only."""
+    """image/video/pdf/file/audio — caption plus the media source when it is
+    write-safe (file_upload, or external NOT on Notion's signed storage).
+
+    The pre-2026-08 caption-only rule made broken slave media un-healable:
+    a hash mismatch produced UPDATE, the caption-only PATCH was a no-op, and
+    the slave kept its expiring signed-S3 'external' URL forever (the n8n
+    .json incident). PATCH /v1/blocks supports updating the source per the
+    current OpenAPI spec.
+    """
 
     @pytest.mark.parametrize("block_type", ["image", "video", "pdf", "file", "audio"])
-    def test_recursive_diff_caption_only(self, block_type):
+    def test_recursive_diff_writes_external_source(self, block_type):
         client = _make_mock_client()
         ops = [_make_recursive_op(block_type, {
             "type": "external",
@@ -338,10 +346,14 @@ class TestFileBasedSanitization:
         })]
         execute_recursive_diff(client, ops)
         data = _get_update_data(client)
-        assert data == {block_type: {"caption": [{"type": "text", "text": {"content": "caption"}}]}}
+        assert data == {block_type: {
+            "caption": [{"type": "text", "text": {"content": "caption"}}],
+            "type": "external",
+            "external": {"url": "https://example.com/test.png"},
+        }}
 
     @pytest.mark.parametrize("block_type", ["image", "video", "pdf", "file", "audio"])
-    def test_diff_caption_only(self, block_type):
+    def test_diff_writes_external_source(self, block_type):
         client = _make_mock_client()
         ops = [_make_diff_op(block_type, {
             "type": "external",
@@ -350,7 +362,11 @@ class TestFileBasedSanitization:
         })]
         execute_diff(client, ops, page_id="page-1")
         data = _get_update_data(client)
-        assert data == {block_type: {"caption": [{"type": "text", "text": {"content": "caption"}}]}}
+        assert data == {block_type: {
+            "caption": [{"type": "text", "text": {"content": "caption"}}],
+            "type": "external",
+            "external": {"url": "https://example.com/test.png"},
+        }}
 
     @pytest.mark.parametrize("block_type", ["image", "video", "pdf", "file", "audio"])
     def test_empty_caption(self, block_type):
@@ -362,7 +378,58 @@ class TestFileBasedSanitization:
         })]
         execute_recursive_diff(client, ops)
         data = _get_update_data(client)
-        assert data == {block_type: {"caption": []}}
+        assert data == {block_type: {
+            "caption": [],
+            "type": "external",
+            "external": {"url": "https://example.com/test.png"},
+        }}
+
+    def test_file_upload_source_written_with_name(self):
+        """A re-uploaded file block writes file_upload + name (heals the slave)."""
+        result = _sanitize_for_update("file", {
+            "type": "file_upload",
+            "file_upload": {"id": "fu_123"},
+            "caption": [],
+            "name": "call-intelligence-template.json",
+        })
+        assert result == {"file": {
+            "caption": [],
+            "type": "file_upload",
+            "file_upload": {"id": "fu_123"},
+            "name": "call-intelligence-template.json",
+        }}
+
+    def test_name_only_written_for_file_blocks(self):
+        """image/video/pdf/audio have no 'name' in the update schema."""
+        result = _sanitize_for_update("image", {
+            "type": "file_upload",
+            "file_upload": {"id": "fu_123"},
+            "caption": [],
+            "name": "leaked.png",
+        })
+        assert "name" not in result["image"]
+
+    def test_signed_s3_external_stays_caption_only(self):
+        """An 'external' URL on Notion's signed storage must NOT be written —
+        it would be accepted but die within ~1 hour (written-but-invisible)."""
+        result = _sanitize_for_update("file", {
+            "type": "external",
+            "external": {"url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/f.json?X-Amz-Signature=x"},
+            "caption": [{"type": "text", "text": {"content": "c"}}],
+            "name": "f.json",
+        })
+        assert result == {"file": {"caption": [{"type": "text", "text": {"content": "c"}}]}}
+
+    def test_hosted_file_content_stays_caption_only(self):
+        """Raw hosted 'file' content (expiring URL) is never writable — callers
+        must pre-convert via re-upload; until then, caption-only."""
+        result = _sanitize_for_update("file", {
+            "type": "file",
+            "file": {"url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/f.json?X-Amz-Signature=x", "expiry_time": "2026-08-28T13:08:22Z"},
+            "caption": [],
+            "name": "f.json",
+        })
+        assert result == {"file": {"caption": []}}
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +774,7 @@ class TestEdgeCases:
         assert data["heading_1"]["color"] == "default"
 
     def test_no_caption_in_file_block(self):
-        """File block without caption key."""
+        """File block without caption key still sends empty caption + safe source."""
         client = _make_mock_client()
         ops = [_make_recursive_op("image", {
             "type": "external",
@@ -715,7 +782,11 @@ class TestEdgeCases:
         })]
         execute_recursive_diff(client, ops)
         data = _get_update_data(client)
-        assert data == {"image": {"caption": []}}
+        assert data == {"image": {
+            "caption": [],
+            "type": "external",
+            "external": {"url": "https://example.com/img.png"},
+        }}
 
     def test_multiple_ops_stats(self):
         """Multiple operations return correct stats."""
@@ -820,20 +891,28 @@ class TestSanitizeForUpdate:
         }}
 
     @pytest.mark.parametrize("block_type", ["image", "video", "pdf", "file", "audio"])
-    def test_file_blocks_caption_only(self, block_type):
+    def test_file_blocks_write_safe_source(self, block_type):
         result = _sanitize_for_update(block_type, {
             "type": "external",
             "external": {"url": "https://example.com/test.png"},
             "caption": [{"type": "text", "text": {"content": "cap"}}],
         })
-        assert result == {block_type: {"caption": [{"type": "text", "text": {"content": "cap"}}]}}
+        assert result == {block_type: {
+            "caption": [{"type": "text", "text": {"content": "cap"}}],
+            "type": "external",
+            "external": {"url": "https://example.com/test.png"},
+        }}
 
     def test_file_block_no_caption(self):
         result = _sanitize_for_update("image", {
             "type": "external",
             "external": {"url": "https://example.com/img.png"},
         })
-        assert result == {"image": {"caption": []}}
+        assert result == {"image": {
+            "caption": [],
+            "type": "external",
+            "external": {"url": "https://example.com/img.png"},
+        }}
 
     def test_numbered_list_strips_list_start_index(self):
         result = _sanitize_for_update("numbered_list_item", {

@@ -29,9 +29,17 @@ _RICH_TEXT_ONLY_BLOCKS = frozenset([
     "callout", "toggle", "heading_1", "heading_2", "heading_3"
 ])
 
-# Block types that contain files/external resources
-# For these blocks, we can only update the caption during an UPDATE operation
-# The type/file/external fields cannot be changed via update - only via replace
+# Block types that contain files/external resources.
+# PATCH /v1/blocks/{id} CAN update the media source (verified against the
+# OpenAPI spec 2026-08-28: image/video/pdf/audio take
+# updateMediaContentWithFileAndCaptionRequest, file takes
+# updateMediaContentWithFileNameAndCaptionRequest — external/file_upload,
+# caption, and for file blocks also name). The pre-2026-08 caption-only rule
+# left a broken slave file block un-healable forever: a hash mismatch produced
+# UPDATE (same type), the caption-only PATCH was a no-op, and the block kept
+# its expiring signed-S3 'external' URL (the n8n .json incident).
+# _sanitize_for_update writes the source only when it is write-safe:
+# 'file_upload', or 'external' NOT pointing at Notion's signed storage.
 _FILE_BASED_BLOCKS = frozenset([
     "image", "video", "pdf", "file", "audio"
 ])
@@ -286,7 +294,28 @@ def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
         return {block_type: restricted}
 
     if block_type in _FILE_BASED_BLOCKS:
-        return {block_type: {"caption": block_content.get("caption", [])}}
+        restricted = {"caption": block_content.get("caption", [])}
+        media_type = block_content.get("type")
+        media_value = block_content.get(media_type) if media_type else None
+        # Write the media source only when it is write-safe. A 'file_upload' id
+        # is always safe. An 'external' URL is safe unless it points at Notion's
+        # signed storage — writing that would be accepted but expire within
+        # ~1 hour (the written-but-invisible failure mode). Hosted 'file'
+        # content (expiring URL + expiry_time) is never writable: callers must
+        # pre-convert via re-upload; until then, caption-only as before.
+        source_is_safe = (
+            media_type == "file_upload" and isinstance(media_value, dict)
+        ) or (
+            media_type == "external"
+            and isinstance(media_value, dict)
+            and not is_signed_file_url(media_value.get("url"))
+        )
+        if source_is_safe:
+            restricted["type"] = media_type
+            restricted[media_type] = media_value
+            if block_type == "file" and block_content.get("name"):
+                restricted["name"] = block_content["name"]
+        return {block_type: restricted}
 
     # All remaining types need a mutable copy
     clean = block_content.copy()
