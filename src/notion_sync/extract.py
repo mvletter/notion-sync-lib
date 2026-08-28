@@ -259,6 +259,15 @@ def extract_block_text(block: dict) -> str:
             url = media_data.get("external", {}).get("url", "")
         elif media_data.get("type") == "file":
             url = media_data.get("file", {}).get("url", "")
+        elif media_data.get("type") == "file_upload":
+            # Write-side payload (a re-uploaded master block). There is no
+            # stable URL, but it MUST hash differently from a block with no
+            # source: a broken sourceless slave block otherwise hashes equal
+            # to the healthy master, is KEPT by every sync, and can never be
+            # healed (n8n .json incident, 2026-08-28). The constant marker is
+            # deliberate — upload ids change on every re-upload and would
+            # cause phantom diffs between runs.
+            url = "file_upload"
 
         caption = extract_rich_text(media_data.get("caption", []))
 

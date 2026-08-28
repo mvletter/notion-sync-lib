@@ -1118,3 +1118,38 @@ class TestExtractNewBlockTypes:
         from notion_sync.extract import extract_block_text
         block = {"type": "meeting_notes", "meeting_notes": {}}
         assert extract_block_text(block) == "meeting_notes"
+
+
+class TestMediaSourceHashIdentity:
+    """A file_upload source must hash differently from a sourceless block —
+    otherwise a broken slave media block is KEPT forever and can never heal
+    (n8n call-intelligence-template.json incident, 2026-08-28)."""
+
+    def test_file_upload_extract_differs_from_sourceless(self):
+        from notion_sync.extract import extract_block_text
+
+        uploaded = {
+            "type": "file",
+            "file": {"type": "file_upload", "file_upload": {"id": "fu_1"}, "caption": [], "name": "t.json"},
+        }
+        sourceless = {"type": "file", "file": {"caption": [], "name": "t.json"}}
+        assert extract_block_text(uploaded) != extract_block_text(sourceless)
+
+    def test_file_upload_hash_stable_across_upload_ids(self):
+        from notion_sync.diff import create_content_hash
+
+        a = {"type": "file", "file": {"type": "file_upload", "file_upload": {"id": "fu_1"}, "caption": []}}
+        b = {"type": "file", "file": {"type": "file_upload", "file_upload": {"id": "fu_2"}, "caption": []}}
+        assert create_content_hash(a) == create_content_hash(b)
+
+    def test_diff_updates_sourceless_slave_against_uploaded_master(self):
+        from notion_sync.diff import generate_diff
+
+        slave = {"id": "s1", "type": "file", "file": {"caption": [], "name": "t.json"}}
+        master = {
+            "id": "m1",
+            "type": "file",
+            "file": {"type": "file_upload", "file_upload": {"id": "fu_1"}, "caption": [], "name": "t.json"},
+        }
+        ops = generate_diff([slave], [master])
+        assert [op["op"] for op in ops] == ["UPDATE"]

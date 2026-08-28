@@ -61,3 +61,4 @@ class TestExtractPageIcon:
             "icon": {"type": "emoji", "emoji": "✅"},
         }
         assert extract_page_icon(page) == {"type": "emoji", "emoji": "✅"}
+
