@@ -311,7 +311,8 @@ def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
             and not is_signed_file_url(media_value.get("url"))
         )
         if source_is_safe:
-            restricted["type"] = media_type
+            # NOTE: no "type" discriminator — PATCH rejects it with
+            # 'body.<block_type>.type should be not present' (probed 2026-08-28).
             restricted[media_type] = media_value
             if block_type == "file" and block_content.get("name"):
                 restricted["name"] = block_content["name"]

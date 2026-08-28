@@ -348,7 +348,6 @@ class TestFileBasedSanitization:
         data = _get_update_data(client)
         assert data == {block_type: {
             "caption": [{"type": "text", "text": {"content": "caption"}}],
-            "type": "external",
             "external": {"url": "https://example.com/test.png"},
         }}
 
@@ -364,7 +363,6 @@ class TestFileBasedSanitization:
         data = _get_update_data(client)
         assert data == {block_type: {
             "caption": [{"type": "text", "text": {"content": "caption"}}],
-            "type": "external",
             "external": {"url": "https://example.com/test.png"},
         }}
 
@@ -380,7 +378,6 @@ class TestFileBasedSanitization:
         data = _get_update_data(client)
         assert data == {block_type: {
             "caption": [],
-            "type": "external",
             "external": {"url": "https://example.com/test.png"},
         }}
 
@@ -394,7 +391,6 @@ class TestFileBasedSanitization:
         })
         assert result == {"file": {
             "caption": [],
-            "type": "file_upload",
             "file_upload": {"id": "fu_123"},
             "name": "call-intelligence-template.json",
         }}
@@ -784,7 +780,6 @@ class TestEdgeCases:
         data = _get_update_data(client)
         assert data == {"image": {
             "caption": [],
-            "type": "external",
             "external": {"url": "https://example.com/img.png"},
         }}
 
@@ -899,7 +894,6 @@ class TestSanitizeForUpdate:
         })
         assert result == {block_type: {
             "caption": [{"type": "text", "text": {"content": "cap"}}],
-            "type": "external",
             "external": {"url": "https://example.com/test.png"},
         }}
 
@@ -910,7 +904,6 @@ class TestSanitizeForUpdate:
         })
         assert result == {"image": {
             "caption": [],
-            "type": "external",
             "external": {"url": "https://example.com/img.png"},
         }}
 
