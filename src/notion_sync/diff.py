@@ -1548,6 +1548,15 @@ def _prepare_block_for_api(
         # Callout icons are handled separately below (they need conversion, not removal).
         if block_type != "callout":
             cleaned[block_type].pop("icon", None)
+        # Strip list_start_index — the read API returns it on numbered_list_item
+        # blocks whose list resumes at a non-1 index, but the write API rejects it:
+        # "body.children[0].numbered_list_item.list_start_index should be not
+        # present, instead was 10". The start index is not writable at all via the
+        # public API, so an inserted resumed list restarts at 1 in the slave.
+        # NOTE: deliberately NOT folded into create_content_hash — an unwritable
+        # field in the hash would produce permanently un-applyable phantom diffs.
+        if block_type == "numbered_list_item":
+            cleaned[block_type].pop("list_start_index", None)
 
     # Convert hosted images to write-compatible format.
     # Notion read API returns workspace-hosted images as {"type": "file", "file": {...}}.

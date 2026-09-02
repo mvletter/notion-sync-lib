@@ -285,9 +285,14 @@ def unwrap_column_list(
             block_type = block.get("type")
             block_content = block.get(block_type, {})
 
-            # Remove children key if present (we're flattening)
+            # Remove children key if present (we're flattening).
+            # Also drop list_start_index: the read API returns it on a
+            # numbered_list_item whose list resumes at a non-1 index, but the
+            # write API rejects it ("body.children[0].numbered_list_item.
+            # list_start_index should be not present, instead was 10").
             if isinstance(block_content, dict):
-                block_content = {k: v for k, v in block_content.items() if k != "children"}
+                _drop = {"children", "list_start_index"}
+                block_content = {k: v for k, v in block_content.items() if k not in _drop}
 
             flat_blocks.append({
                 "type": block_type,

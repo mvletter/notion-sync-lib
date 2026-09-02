@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch, call
 from notion_sync.diff import (
     execute_recursive_diff,
     execute_diff,
+    _prepare_block_for_api,
     _sanitize_for_update,
     _prepare_callout_icon_for_update,
     _RICH_TEXT_ONLY_BLOCKS,
@@ -477,6 +478,92 @@ class TestNumberedListSanitization:
         assert "list_start_index" not in data["numbered_list_item"]
         assert "children" not in data["numbered_list_item"]
         assert data["numbered_list_item"]["color"] == "default"
+
+
+class TestNumberedListInsertSanitization:
+    """numbered_list_item: the INSERT/create path strips list_start_index too.
+
+    The read API returns list_start_index on a numbered list that resumes at a
+    non-1 index; the write API rejects it with
+    "body.children[0].numbered_list_item.list_start_index should be not present,
+    instead was 10" (Herald change 777, 2026-09-02).
+    """
+
+    def test_prepare_block_strips_list_start_index(self):
+        """_prepare_block_for_api: top-level numbered_list_item."""
+        block = {
+            "id": "block-1",
+            "type": "numbered_list_item",
+            "has_children": False,
+            "numbered_list_item": {
+                "rich_text": [{"type": "text", "text": {"content": "step 10"}}],
+                "list_start_index": 10,
+                "color": "default",
+            },
+        }
+        result = _prepare_block_for_api(block)
+        assert "list_start_index" not in result["numbered_list_item"]
+        # Other props preserved
+        assert result["numbered_list_item"]["color"] == "default"
+        assert result["numbered_list_item"]["rich_text"][0]["text"]["content"] == "step 10"
+
+    def test_prepare_block_strips_list_start_index_in_children(self):
+        """_prepare_block_for_api: nested as a _children child (recursion)."""
+        block = {
+            "id": "toggle-1",
+            "type": "toggle",
+            "toggle": {"rich_text": [{"type": "text", "text": {"content": "more"}}]},
+            "_children": [
+                {
+                    "id": "block-2",
+                    "type": "numbered_list_item",
+                    "numbered_list_item": {
+                        "rich_text": [{"type": "text", "text": {"content": "step 10"}}],
+                        "list_start_index": 10,
+                    },
+                }
+            ],
+        }
+        result = _prepare_block_for_api(block)
+        child = result["toggle"]["children"][0]
+        assert "list_start_index" not in child["numbered_list_item"]
+        assert child["numbered_list_item"]["rich_text"][0]["text"]["content"] == "step 10"
+
+    def test_unwrap_column_list_strips_list_start_index(self):
+        """columns.unwrap_column_list: flattened blocks come straight from the
+        read API, so the same field must be dropped before append."""
+        from notion_sync import columns as columns_mod
+
+        client = _make_mock_client()
+        client.get_blocks = MagicMock(return_value=[])
+        fake_columns = [
+            {
+                "column_id": "col-1",
+                "width_ratio": 0.5,
+                "blocks": [
+                    {
+                        "id": "block-1",
+                        "type": "numbered_list_item",
+                        "numbered_list_item": {
+                            "rich_text": [{"type": "text", "text": {"content": "step 10"}}],
+                            "list_start_index": 10,
+                            "children": [{"type": "paragraph"}],
+                        },
+                    }
+                ],
+            }
+        ]
+        with patch.object(columns_mod, "read_column_content", return_value=fake_columns):
+            columns_mod.unwrap_column_list(
+                client, "page-1", "collist-1", delete_original=False
+            )
+
+        flat_blocks = client.append_blocks.call_args[0][1]
+        assert len(flat_blocks) == 1
+        content = flat_blocks[0]["numbered_list_item"]
+        assert "list_start_index" not in content
+        assert "children" not in content
+        assert content["rich_text"][0]["text"]["content"] == "step 10"
 
 
 # ---------------------------------------------------------------------------
