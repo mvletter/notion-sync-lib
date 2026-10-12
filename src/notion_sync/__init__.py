@@ -31,6 +31,7 @@ from notion_sync.modify import delete_all_blocks, append_blocks
 # Diff operations
 from notion_sync.diff import (
     CALLOUT_ICON_FALLBACK_EMOJI,
+    NON_CREATABLE_TYPES,
     generate_diff,
     generate_recursive_diff,
     execute_diff,
@@ -131,6 +132,7 @@ __all__ = [
     "prepare_icon_for_api",
     "is_signed_file_url",
     "CALLOUT_ICON_FALLBACK_EMOJI",
+    "NON_CREATABLE_TYPES",
     "resolve_callout_icon_for_write",
     # rich_text
     "chunk_rich_text",
