@@ -64,6 +64,9 @@ _STRUCTURE_ONLY_BLOCKS = frozenset([
 #   causes a Notion validation error ("should be defined, instead was undefined")
 #   because the API does not know the "unsupported" type.
 _NON_CREATABLE = frozenset({"child_database", "child_page", "meeting_notes", "unsupported"})
+# Public alias: consumers that build positional master<->slave maps must skip
+# exactly the types this module refuses to write, or their indexes drift.
+NON_CREATABLE_TYPES = _NON_CREATABLE
 
 # Block types with a writable `color` property whose value must feed the content
 # hash (SPEC-BLOCK-STYLE-001-M3). Without this, a master-side style-only edit
