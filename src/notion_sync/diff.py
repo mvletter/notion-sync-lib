@@ -12,6 +12,8 @@ from typing import Any
 
 from notion_sync.client import RateLimitedNotionClient
 from notion_sync.extract import (
+    HEADING_TYPES,
+    TEXT_BLOCK_TYPES,
     extract_block_text,
     extract_link_identity,
     extract_mention_identity,
@@ -24,10 +26,8 @@ logger = logging.getLogger(__name__)
 # These require special handling to avoid Notion API errors:
 # - callout: icon property requires special handling
 # - toggle: "Cannot remove toggle...children first" error
-# - heading_1/2/3: is_toggleable triggers error even when false
-_RICH_TEXT_ONLY_BLOCKS = frozenset([
-    "callout", "toggle", "heading_1", "heading_2", "heading_3"
-])
+# - heading_*: is_toggleable triggers error even when false
+_RICH_TEXT_ONLY_BLOCKS = frozenset({"callout", "toggle", *HEADING_TYPES})
 
 # Block types that contain files/external resources.
 # PATCH /v1/blocks/{id} CAN update the media source (verified against the
@@ -70,10 +70,7 @@ _NON_CREATABLE = frozenset({"child_database", "child_page", "meeting_notes", "un
 # (color change) produces an identical hash — change detection never surfaces it
 # and the slave silently keeps its old color. `callout` is handled separately in
 # create_content_hash because it additionally hashes its `icon`.
-_COLOR_BEARING_TYPES = frozenset({
-    "paragraph", "heading_1", "heading_2", "heading_3",
-    "bulleted_list_item", "numbered_list_item", "quote", "toggle", "to_do",
-})
+_COLOR_BEARING_TYPES = TEXT_BLOCK_TYPES - {"callout"}
 
 
 def _is_synced_copy(block: dict[str, Any]) -> bool:
@@ -269,7 +266,7 @@ def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
     """
     if block_type in _RICH_TEXT_ONLY_BLOCKS:
         restricted = {"rich_text": block_content.get("rich_text", [])}
-        if block_type in ("heading_1", "heading_2", "heading_3"):
+        if block_type in HEADING_TYPES:
             if "is_toggleable" in block_content:
                 restricted["is_toggleable"] = block_content["is_toggleable"]
             if "color" in block_content:
@@ -398,7 +395,7 @@ def create_content_hash(block: dict[str, Any]) -> str:
         # this, such blocks hash equal, KEEP forever, and the toggle state is
         # un-syncable. Folded only when True so plain headings keep their
         # pre-existing hash (no rebaseline flood — same rationale as color).
-        if block_type in ("heading_1", "heading_2", "heading_3"):
+        if block_type in HEADING_TYPES:
             if block.get(block_type, {}).get("is_toggleable", False):
                 extras += ":toggleable=true"
     elif block_type == "callout":
@@ -934,7 +931,7 @@ def execute_tree_sync(
         # Notion side, flip is_toggleable=True before attempting child sync.
         notion_type = notion_block.get("type", "")
         if (
-            notion_type in ("heading_1", "heading_2", "heading_3")
+            notion_type in HEADING_TYPES
             and new_children
             and not notion_block.get(notion_type, {}).get("is_toggleable", False)
             and not dry_run

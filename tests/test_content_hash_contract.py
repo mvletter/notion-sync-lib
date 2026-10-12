@@ -70,6 +70,20 @@ DIMENSION_CASES = [
     ("heading_toggleable",
         {"type": "heading_2", "heading_2": {"rich_text": [_text_run("x")], "is_toggleable": False}},
         {"type": "heading_2", "heading_2": {"rich_text": [_text_run("x")], "is_toggleable": True}}),
+    # heading_4 (Notion 2026): was absent from every heading enumeration, so
+    # extract_block_text returned "" and ALL heading_4 blocks hashed equal.
+    ("heading_4_text",
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("alpha")]}},
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("beta")]}}),
+    ("heading_4_toggleable",
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("x")], "is_toggleable": False}},
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("x")], "is_toggleable": True}}),
+    ("heading_4_color",
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("x")], "color": "default"}},
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("x")], "color": "red"}}),
+    ("heading_4_link",
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("x")]}},
+        {"type": "heading_4", "heading_4": {"rich_text": [_text_run("x", url=f"/p/{PAGE}#{BLOCK_A}")]}}),
 ]
 
 

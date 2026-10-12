@@ -31,24 +31,24 @@ def make_paragraph(text: str) -> dict[str, Any]:
 
 
 def make_heading(level: int, text: str) -> dict[str, Any]:
-    """Create a heading block (level 1, 2, or 3).
+    """Create a heading block (level 1-4).
 
     Args:
-        level: Heading level (1, 2, or 3).
+        level: Heading level (1, 2, 3, or 4).
         text: Text content for the heading.
 
     Returns:
         Heading block dictionary ready for Notion API.
 
     Raises:
-        ValueError: If level is not 1, 2, or 3.
+        ValueError: If level is not 1, 2, 3, or 4.
 
     Example:
         >>> make_heading(1, "Chapter 1")
         {'type': 'heading_1', 'heading_1': {'rich_text': [...]}}
     """
-    if level not in (1, 2, 3):
-        raise ValueError(f"Heading level must be 1, 2, or 3, got {level}")
+    if level not in (1, 2, 3, 4):
+        raise ValueError(f"Heading level must be 1, 2, 3, or 4, got {level}")
 
     heading_type = f"heading_{level}"
     return {

@@ -11,6 +11,7 @@ NO live Notion API calls — these use mocks.
 
 import copy
 import pytest
+
 from unittest.mock import MagicMock, patch, call
 
 from notion_sync.diff import (
@@ -157,7 +158,7 @@ class TestParagraphSanitization:
 class TestHeadingSanitization:
     """Headings use _RICH_TEXT_ONLY_BLOCKS path with special heading props."""
 
-    @pytest.mark.parametrize("heading_type", ["heading_1", "heading_2", "heading_3"])
+    @pytest.mark.parametrize("heading_type", ["heading_1", "heading_2", "heading_3", "heading_4"])
     def test_recursive_diff_preserves_heading_props(self, heading_type):
         """execute_recursive_diff: preserves is_toggleable and color for headings."""
         client = _make_mock_client()
@@ -176,7 +177,7 @@ class TestHeadingSanitization:
         # Should NOT have children
         assert "children" not in data[heading_type]
 
-    @pytest.mark.parametrize("heading_type", ["heading_1", "heading_2", "heading_3"])
+    @pytest.mark.parametrize("heading_type", ["heading_1", "heading_2", "heading_3", "heading_4"])
     def test_diff_preserves_heading_props(self, heading_type):
         """execute_diff: preserves is_toggleable and color for headings."""
         client = _make_mock_client()

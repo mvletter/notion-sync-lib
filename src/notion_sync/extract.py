@@ -15,14 +15,23 @@ _UUID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Single source of truth for the heading family. Notion added heading_4 in 2026;
+# hand-written heading_1/2/3 tuples elsewhere made it fall through every branch
+# (never translated, constant content hash). Herald imports these — never
+# enumerate block-type families with literals.
+HEADING_TYPES = frozenset({"heading_1", "heading_2", "heading_3", "heading_4"})
+
+# Block types whose content lives in `<type>.rich_text`.
+TEXT_BLOCK_TYPES = frozenset({
+    "paragraph", *HEADING_TYPES,
+    "bulleted_list_item", "numbered_list_item", "quote",
+    "callout", "toggle", "to_do",
+})
+
 # Rich-text-bearing block types whose plain text is folded into the content
 # hash by extract_block_text — the same set whose links must be folded so the
 # hash and the link identity stay symmetric (SPEC-LINK-002-M1).
-_TEXT_BLOCK_TYPES = frozenset({
-    "paragraph", "heading_1", "heading_2", "heading_3",
-    "bulleted_list_item", "numbered_list_item", "quote",
-    "callout", "toggle", "to_do", "code",
-})
+_TEXT_BLOCK_TYPES = TEXT_BLOCK_TYPES | {"code"}
 _CAPTIONED_TYPES = frozenset({"image", "video", "file", "pdf", "bookmark", "embed"})
 
 
@@ -185,20 +194,7 @@ def extract_block_text(block: dict) -> str:
     block_data = block.get(block_type, {})
 
     # Text-based blocks with rich_text content
-    text_block_types = {
-        "paragraph",
-        "heading_1",
-        "heading_2",
-        "heading_3",
-        "bulleted_list_item",
-        "numbered_list_item",
-        "quote",
-        "callout",
-        "toggle",
-        "to_do",
-    }
-
-    if block_type in text_block_types:
+    if block_type in TEXT_BLOCK_TYPES:
         rich_text = block_data.get("rich_text", [])
         text = extract_rich_text(rich_text)
 

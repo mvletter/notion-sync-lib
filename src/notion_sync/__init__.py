@@ -18,7 +18,12 @@ from notion_sync.client import get_notion_client, RateLimitedNotionClient
 from notion_sync.fetch import fetch_page_blocks, fetch_blocks_recursive
 
 # Extract operations
-from notion_sync.extract import extract_block_text, extract_rich_text
+from notion_sync.extract import (
+    HEADING_TYPES,
+    TEXT_BLOCK_TYPES,
+    extract_block_text,
+    extract_rich_text,
+)
 
 # Modify operations
 from notion_sync.modify import delete_all_blocks, append_blocks
@@ -76,6 +81,8 @@ from notion_sync.rich_text import (
 )
 
 __all__ = [
+    "HEADING_TYPES",
+    "TEXT_BLOCK_TYPES",
     # Client
     "get_notion_client",
     "RateLimitedNotionClient",
