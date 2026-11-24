@@ -145,6 +145,57 @@ def extract_mention_identity(block: dict) -> str:
     return "|".join(parts)
 
 
+def _code_from_rich_text(rich_text: list[dict]) -> list[str]:
+    """Plain text of every run with the ``code`` annotation, in document order."""
+    out = []
+    for run in rich_text or []:
+        if (run.get("annotations") or {}).get("code"):
+            text = run.get("plain_text")
+            if text is None:
+                text = (run.get("text") or {}).get("content", "")
+            if text:
+                out.append(text)
+    return out
+
+
+def extract_code_identity(block: dict) -> str:
+    """Concatenate the inline-code runs of a block's rich_text.
+
+    Inline code is an annotation, so ``extract_block_text`` flattens a block
+    with ``status`` in code and the same block with **status** in bold to the
+    same plain text. Without this fold they hash equal and the diff KEEPs the
+    slave forever: a master edit from bold to code (or a slave that lost its
+    code formatting) is un-syncable AND un-healable. Live-confirmed 2026-11-24
+    on Herald's "Call notifications" NL slave: three force-retranslates in a
+    row left every payload field name whose translated words did not change in
+    bold, while lines whose words changed came through as code. Occurrence #6
+    of the hash-contract pitfall (color, callout icon, links, mentions,
+    toggleable).
+
+    Returns ``""`` when the block has no inline code, so blocks without code
+    keep their exact pre-fix hash (flood containment, same rationale as
+    SPEC-LINK-002-M1 R1.4). Scoped to the ``code`` annotation only: bold,
+    italic and the other annotations are deliberately NOT folded, because they
+    are on far more blocks and would make nearly every page look changed.
+    Walks the same rich_text-bearing fields ``extract_block_text`` covers:
+    text-type ``rich_text``, ``table_row.cells``, and captions.
+    """
+    block_type = block.get("type", "")
+    block_data = block.get(block_type, {})
+    parts: list[str] = []
+
+    if block_type in _TEXT_BLOCK_TYPES:
+        parts.extend(_code_from_rich_text(block_data.get("rich_text", [])))
+    elif block_type == "table_row":
+        for cell in block_data.get("cells", []):
+            parts.extend(_code_from_rich_text(cell))
+
+    if block_type in _CAPTIONED_TYPES:
+        parts.extend(_code_from_rich_text(block_data.get("caption", [])))
+
+    return "|".join(parts)
+
+
 def extract_rich_text(rich_text: list[dict]) -> str:
     """Extract plain text from a Notion rich_text array.
 
