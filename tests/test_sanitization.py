@@ -567,6 +567,76 @@ class TestNumberedListInsertSanitization:
         assert content["rich_text"][0]["text"]["content"] == "step 10"
 
 
+class TestNumberedListFormatSanitization:
+    """numbered_list_item: list_format is stripped on every write path.
+
+    The read API returns list_format (e.g. "numbers") on numbered list items
+    since November 2026; the write API rejects it with
+    "body.children[0].numbered_list_item.list_format should be not present,
+    instead was `"numbers"`" (Herald change 871, 2026-11-24).
+    """
+
+    @staticmethod
+    def _content():
+        return {
+            "rich_text": [{"type": "text", "text": {"content": "Go to Dial plan"}}],
+            "list_format": "numbers",
+            "color": "default",
+        }
+
+    def test_diff_strips_list_format(self):
+        client = _make_mock_client()
+        ops = [_make_diff_op("numbered_list_item", self._content())]
+        execute_diff(client, ops, page_id="page-1")
+        data = _get_update_data(client)["numbered_list_item"]
+        assert "list_format" not in data
+        assert data["color"] == "default"
+
+    def test_recursive_diff_strips_list_format(self):
+        client = _make_mock_client()
+        execute_recursive_diff(client, [_make_recursive_op("numbered_list_item", self._content())])
+        data = _get_update_data(client)["numbered_list_item"]
+        assert "list_format" not in data
+        assert data["color"] == "default"
+
+    def test_prepare_block_strips_list_format(self):
+        block = {"id": "block-1", "type": "numbered_list_item", "has_children": False,
+                 "numbered_list_item": self._content()}
+        result = _prepare_block_for_api(block)["numbered_list_item"]
+        assert "list_format" not in result
+        assert result["rich_text"][0]["text"]["content"] == "Go to Dial plan"
+
+    def test_prepare_block_strips_list_format_in_children(self):
+        block = {
+            "id": "toggle-1",
+            "type": "toggle",
+            "toggle": {"rich_text": [{"type": "text", "text": {"content": "more"}}]},
+            "_children": [{"id": "block-2", "type": "numbered_list_item",
+                           "numbered_list_item": self._content()}],
+        }
+        child = _prepare_block_for_api(block)["toggle"]["children"][0]
+        assert "list_format" not in child["numbered_list_item"]
+
+    def test_unwrap_column_list_strips_list_format(self):
+        from notion_sync import columns as columns_mod
+
+        client = _make_mock_client()
+        client.get_blocks = MagicMock(return_value=[])
+        fake_columns = [{"column_id": "col-1", "width_ratio": 0.5, "blocks": [
+            {"id": "block-1", "type": "numbered_list_item", "numbered_list_item": self._content()}
+        ]}]
+        with patch.object(columns_mod, "read_column_content", return_value=fake_columns):
+            columns_mod.unwrap_column_list(client, "page-1", "collist-1", delete_original=False)
+        content = client.append_blocks.call_args[0][1][0]["numbered_list_item"]
+        assert "list_format" not in content
+
+    def test_bulleted_list_item_keeps_its_fields(self):
+        """Control: the strip is only for numbered_list_item."""
+        block = {"id": "b", "type": "bulleted_list_item", "has_children": False,
+                 "bulleted_list_item": {"rich_text": [], "color": "blue"}}
+        assert _prepare_block_for_api(block)["bulleted_list_item"]["color"] == "blue"
+
+
 # ---------------------------------------------------------------------------
 # Table (strip table_width)
 # ---------------------------------------------------------------------------
