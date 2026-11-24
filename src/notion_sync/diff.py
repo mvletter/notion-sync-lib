@@ -15,6 +15,7 @@ from notion_sync.extract import (
     HEADING_TYPES,
     TEXT_BLOCK_TYPES,
     extract_block_text,
+    extract_code_identity,
     extract_link_identity,
     extract_mention_identity,
 )
@@ -471,6 +472,15 @@ def create_content_hash(block: dict[str, Any]) -> str:
     mention_ident = extract_mention_identity(block)
     if mention_ident:
         extras += f":mentions={mention_ident}"
+
+    # Fold inline-code identity so a formatting-only change between code and
+    # plain/bold text is detectable (Herald, Call notifications NL, 2026-11-24).
+    # Appended only when the block has code runs, so blocks without inline
+    # code keep their pre-fix hash (no rebaseline flood, same rationale as the
+    # link and mention folds above).
+    code_ident = extract_code_identity(block)
+    if code_ident:
+        extras += f":code={code_ident}"
 
     # Create normalized string and hash
     normalized = f"{block_type}:{text}{extras}"
