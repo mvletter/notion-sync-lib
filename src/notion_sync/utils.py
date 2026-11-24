@@ -102,6 +102,14 @@ def extract_page_icon(page: dict) -> dict | None:
 # API but never renders — the written-but-invisible failure mode of
 # SPEC-ICON-001. `secure.notion-static.com` is the pre-2021 bucket, still
 # served for old files.
+# Fields the Notion read API returns on a numbered_list_item that the write API
+# rejects ("body.children[0].numbered_list_item.<field> should be not present").
+# list_start_index: a list that resumes at a non-1 index (Herald change 777,
+# 2026-09-02). list_format: e.g. "numbers", returned since November 2026 (Herald
+# change 871, 2026-11-24). Neither can be written through the public API.
+NUMBERED_LIST_READ_ONLY_FIELDS = frozenset({"list_start_index", "list_format"})
+
+
 _SIGNED_FILE_URL_MARKERS = ("amazonaws.com", "notion-static.com")
 
 

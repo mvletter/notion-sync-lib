@@ -7,6 +7,8 @@ Handles column layout operations including width_ratio preservation.
 import logging
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from notion_sync.utils import NUMBERED_LIST_READ_ONLY_FIELDS
+
 if TYPE_CHECKING:
     from notion_sync.client import RateLimitedNotionClient
 
@@ -291,7 +293,7 @@ def unwrap_column_list(
             # write API rejects it ("body.children[0].numbered_list_item.
             # list_start_index should be not present, instead was 10").
             if isinstance(block_content, dict):
-                _drop = {"children", "list_start_index"}
+                _drop = {"children", *NUMBERED_LIST_READ_ONLY_FIELDS}
                 block_content = {k: v for k, v in block_content.items() if k not in _drop}
 
             flat_blocks.append({

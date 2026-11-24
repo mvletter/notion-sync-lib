@@ -18,7 +18,11 @@ from notion_sync.extract import (
     extract_link_identity,
     extract_mention_identity,
 )
-from notion_sync.utils import is_signed_file_url, prepare_image_for_api
+from notion_sync.utils import (
+    NUMBERED_LIST_READ_ONLY_FIELDS,
+    is_signed_file_url,
+    prepare_image_for_api,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +255,7 @@ def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
     Rules by block type:
     - _RICH_TEXT_ONLY_BLOCKS: restricted to rich_text + heading props (is_toggleable, color)
     - _FILE_BASED_BLOCKS: caption only
-    - numbered_list_item: strip list_start_index, children
+    - numbered_list_item: strip NUMBERED_LIST_READ_ONLY_FIELDS, children
     - synced_block: null synced_from, strip children
     - column: strip width_ratio >= 1, strip children
     - default: strip children, strip icon (non-callout)
@@ -322,7 +326,8 @@ def _sanitize_for_update(block_type: str, block_content: dict) -> dict:
     clean = block_content.copy()
 
     if block_type == "numbered_list_item":
-        clean.pop("list_start_index", None)
+        for field in NUMBERED_LIST_READ_ONLY_FIELDS:
+            clean.pop(field, None)
         clean.pop("children", None)
         return {block_type: clean}
 
@@ -1555,8 +1560,10 @@ def _prepare_block_for_api(
         # public API, so an inserted resumed list restarts at 1 in the slave.
         # NOTE: deliberately NOT folded into create_content_hash — an unwritable
         # field in the hash would produce permanently un-applyable phantom diffs.
+        # Same for list_format (e.g. "numbers"), see NUMBERED_LIST_READ_ONLY_FIELDS.
         if block_type == "numbered_list_item":
-            cleaned[block_type].pop("list_start_index", None)
+            for field in NUMBERED_LIST_READ_ONLY_FIELDS:
+                cleaned[block_type].pop(field, None)
 
     # Convert hosted images to write-compatible format.
     # Notion read API returns workspace-hosted images as {"type": "file", "file": {...}}.
